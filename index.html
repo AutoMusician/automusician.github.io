@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AutoMusician · 旋律配和声</title>
+<style>
+  :root {
+    --bg: #14161c; --panel: #1c1f29; --line: #2a2e3b;
+    --fg: #e8eaf0; --muted: #8a90a3; --accent: #5b8cff; --rest: #3a3f4d; --err: #ff6b6b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0 auto; max-width: 1040px; padding: 24px;
+    background: var(--bg); color: var(--fg);
+    font: 15px/1.5 -apple-system, "PingFang SC", "Segoe UI", system-ui, sans-serif;
+  }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .hint { color: var(--muted); font-size: 13px; margin: 0 0 16px; }
+  .hint code { background: var(--panel); padding: 1px 6px; border-radius: 4px; color: var(--accent); }
+
+  /* 声部编辑行 */
+  #voices { display: flex; flex-direction: column; gap: 8px; }
+  .voicerow-edit { display: flex; align-items: stretch; gap: 8px; }
+  .voicerow-edit .vtag {
+    flex: 0 0 56px; display: flex; align-items: center; justify-content: center;
+    border-radius: 8px; font-size: 12px; font-weight: 700; text-align: center;
+    background: var(--panel); border: 1px solid var(--line);
+  }
+  .voicerow-edit textarea {
+    flex: 1; min-height: 46px; resize: vertical;
+    background: var(--panel); color: var(--fg); border: 1px solid var(--line);
+    border-radius: 8px; padding: 9px 12px;
+    font: 14px/1.6 "SF Mono", "JetBrains Mono", Menlo, monospace;
+  }
+  .voicerow-edit textarea:focus { outline: none; border-color: var(--accent); }
+  .voicerow-edit .del {
+    flex: 0 0 34px; background: var(--panel); color: var(--muted);
+    border: 1px solid var(--line); border-radius: 8px; cursor: pointer;
+  }
+  .voicerow-edit .del:hover { color: var(--err); border-color: var(--err); }
+  .voicerow-edit .del.hidden { visibility: hidden; }
+  /* 旋律行: 更醒目 */
+  .voicerow-edit.melody .vtag { background: rgba(91,140,255,.16); border-color: var(--accent); color: var(--accent); font-size: 13px; }
+  .voicerow-edit.melody textarea { min-height: 62px; border-color: #39518a; }
+  .voicerow-edit textarea::placeholder { color: #5b6072; }
+
+  .rowbtns { display: flex; gap: 8px; margin: 10px 0 4px; }
+  button, select, input[type=number] {
+    background: var(--panel); color: var(--fg); border: 1px solid var(--line);
+    border-radius: 8px; padding: 8px 14px; font-size: 14px; cursor: pointer;
+  }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  button.ghost { color: var(--muted); }
+  button:disabled { opacity: .45; cursor: default; }
+  .controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 14px 0; }
+  label.field { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; }
+  input[type=number] { width: 60px; cursor: text; }
+  .sep { flex: 1; }
+  .status { margin: 10px 0 14px; color: var(--muted); font-size: 13px; min-height: 20px; }
+  .status.err { color: var(--err); }
+
+  /* 视图容器 */
+  #viz {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    padding: 8px; min-height: 96px; overflow: hidden;
+  }
+  .scroller { overflow-x: auto; }
+  #viz [data-s] { cursor: pointer; }   /* 可点击定位到文本 */
+
+  /* 色块视图 */
+  .voicerow { display: flex; align-items: stretch; gap: 6px; margin-bottom: 6px; }
+  .vlabel { flex: 0 0 48px; align-self: center; font-size: 12px; font-weight: 700; }
+  .blocklane { display: flex; align-items: stretch; gap: 0; min-height: 56px; }
+  .block {
+    flex: none; color: #10121a; font-weight: 700; overflow: hidden; cursor: pointer;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    padding: 4px 1px; box-shadow: inset -1px 0 0 rgba(0,0,0,.28);
+    transition: transform .06s, box-shadow .06s, filter .06s;
+  }
+  .block:first-child { border-top-left-radius: 6px; border-bottom-left-radius: 6px; }
+  .block:last-child { border-top-right-radius: 6px; border-bottom-right-radius: 6px; }
+  .block:hover { filter: brightness(1.14); }
+  .block.barstart { box-shadow: inset 2px 0 0 #586079, inset -1px 0 0 rgba(0,0,0,.28); }
+  .block.rest { color: var(--muted); }
+  .block .lab { font-size: 15px; }
+  .block .sub { font-size: 10px; font-weight: 500; opacity: .7; }
+  .block.active { transform: translateY(-4px); box-shadow: 0 0 0 2px var(--fg), 0 6px 16px rgba(0,0,0,.4); z-index: 1; }
+
+  /* 钢琴卷帘 */
+  .prwrap { display: flex; align-items: stretch; }
+  .prkeys { flex: 0 0 auto; }
+  .prroll { flex: 1; }
+  .prnote { transition: opacity .05s; }
+  .prnote.active { stroke: var(--fg); stroke-width: 2; opacity: 1 !important; }
+
+  /* 五线谱 */
+  .staff text { font-family: "Bravura", "Noto Music", serif; }
+  .snote.active ellipse { fill: var(--fg); stroke: var(--fg); }
+  .snote.active line { stroke: var(--fg); }
+  .srest.active { fill: var(--fg); }
+
+  details { margin-top: 18px; color: var(--muted); font-size: 13px; }
+  summary { cursor: pointer; color: var(--fg); }
+  table { border-collapse: collapse; margin-top: 8px; }
+  td { padding: 3px 14px 3px 0; vertical-align: top; }
+  td code { color: var(--accent); }
+</style>
+</head>
+<body>
+  <h1>AutoMusician · 旋律配和声</h1>
+  <p class="hint">记谱：<code>1-7</code> 唱名 · <code>0</code> 休止 · 重复=延长 · <code>'</code> 断开 · <code>[ ]</code> 占两拍的连音 · <code>+/-</code> 从此处起升/降八度 · 字母=钢琴键(<code>QWRTYIO</code>黑键 · <code>C-G A B</code>低音 · <code>8 9 P</code>高音) · <code>#/b</code> 升降 ·<code>|</code> 小节线(仅装饰) · 旋律首行(必填) <code>1=G 120</code></p>
+
+  <div id="voices"></div>
+
+  <div class="rowbtns">
+    <button id="addVoice" class="ghost">＋ 添加和声行</button>
+    <button id="autoHarm" class="ghost">✨ 自动配和声</button>
+    <label class="field">织体
+      <select id="harmTex">
+        <option value="block">柱式和弦</option>
+        <option value="broken">分解和弦</option>
+        <option value="bass">低音线</option>
+      </select>
+    </label>
+    <span class="sep"></span>
+    <button id="addBars" class="ghost">▮ 加小节线</button>
+    <label class="field">每 <input type="number" id="barBeats" value="4" min="1" max="16" /> 拍</label>
+    <button id="resetDemo" class="ghost" title="清空本地存档并恢复默认示例">↺ 重置</button>
+  </div>
+
+  <div class="controls">
+    <button id="play" class="primary">▶ 播放</button>
+    <button id="stop" disabled>■ 停止</button>
+    <button id="testTone" title="立刻发一声 A4, 确认音频是否可用">🔊 测试音</button>
+    <label class="field">视图
+      <select id="view">
+        <option value="blocks">色块</option>
+        <option value="piano">钢琴卷帘</option>
+        <option value="staff">五线谱</option>
+      </select>
+    </label>
+    <span class="sep"></span>
+    <label class="field">音色
+      <select id="wave">
+        <option value="square">蜂鸣音 (方波)</option>
+        <option value="triangle">三角波</option>
+        <option value="sawtooth">锯齿波</option>
+        <option value="sine">正弦波</option>
+        <option value="piano">钢琴 (合成)</option>
+        <option value="violin">提琴 (合成)</option>
+      </select>
+    </label>
+    <label class="field">采样 <input type="file" id="sample" accept="audio/*" style="max-width:140px" /></label>
+    <label class="field">基准 <input type="number" id="sampleBase" value="60" min="0" max="127" /></label>
+    <button id="clearSample" disabled>清除采样</button>
+  </div>
+
+  <div id="status" class="status"></div>
+  <div id="viz"></div>
+
+  <details>
+    <summary>记谱语法说明</summary>
+    <table>
+      <tr><td><code>1 2 3 4 5 6 7</code></td><td>do re mi fa sol la si（相对调号）</td></tr>
+      <tr><td><code>0</code></td><td>休止符</td></tr>
+      <tr><td><code>111</code></td><td>do 持续 3 拍（紧贴重复 = 延长）</td></tr>
+      <tr><td><code>1'1</code></td><td>两个各 1 拍的 do（<code>'</code> 断开 / 重新触发）</td></tr>
+      <tr><td><code>12</code></td><td>不同音天然分开，无需分隔符</td></tr>
+      <tr><td>空格</td><td>仅作排版，被忽略（<code>1 1</code> 等同 <code>11</code>）</td></tr>
+      <tr><td><code>[123]</code> / <code>[12345]</code></td><td>三连音 / 五连音（方框固定占 2 拍）</td></tr>
+      <tr><td><code>+</code> / <code>-</code></td><td>从此处起所有后续音升 / 降一个八度，可叠加 / 抵消</td></tr>
+      <tr><td><code>8</code> <code>9</code> <code>P</code></td><td>高八度的 do / re / mi（高音区；不改变后续八度）</td></tr>
+      <tr><td><code>C D E F G A B</code></td><td>低八度的 do re mi fa sol la si（QWERTY 键盘下排，低音区）</td></tr>
+      <tr><td><code>Q W R T Y</code></td><td>黑键 #1 #2 #4 #5 #6（数字行相邻白键之间的半音）</td></tr>
+      <tr><td><code>I</code> / <code>O</code></td><td>高音区黑键 #高1 / #高2（在 8-9、9-P 之间）</td></tr>
+      <tr><td><code>1#</code> / <code>3b</code></td><td>升 / 降（小写 b 跟在数字/字母后 = 降；<code>C#</code> <code>Ab</code> 也可）</td></tr>
+      <tr><td><code>|</code></td><td>小节线（仅供阅读，不影响播放）</td></tr>
+      <tr><td><code>1=G 120</code></td><td><b>旋律首行必填</b>：调号 G、速度 120（也可 <code>bpm=120</code>；音符从第 2 行起）</td></tr>
+    </table>
+    <p>多声部：<code>＋ 添加和声行</code> 手动加一行，或 <code>✨ 自动配和声</code> 自动生成和声（织体可选）。和声行没有首行说明，整行都是音符。所有声部同时播放。</p>
+    <p>快捷键：焦点在输入框外时按 <code>空格</code> 播放 / 停止。</p>
+  </details>
+
+  <script src="parser.js"></script>
+  <script src="harmony.js"></script>
+  <script src="render.js"></script>
+  <script src="audio.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
