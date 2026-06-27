@@ -34,22 +34,25 @@ class AudioEngine {
 
   clearSample() { this.sample = null; }
 
-  // 立即发一声 A4, 用于确认当前环境音频是否可用; 返回 AudioContext 状态
-  testBeep() {
+  async testBeep() {
     const ctx = this.ensure();
-    if (ctx.state === 'suspended') ctx.resume();
+    if (ctx.state !== 'running') { try { await ctx.resume(); } catch (e) {} }
     this.scheduleNote(69, ctx.currentTime + 0.02, 0.35);
     return ctx.state;
   }
 
   state() { return this.ctx ? this.ctx.state : 'none'; }
 
-  scheduleNote(midi, start, dur, level) {
+  scheduleNote(midi, start, dur, level, wave) {
     const peak = level == null ? 1 : level;
     if (this.sample) return this.scheduleSample(midi, start, dur, peak);
-    if (this.wave === 'piano') return this.schedulePiano(midi, start, dur, peak);
-    if (this.wave === 'violin') return this.scheduleViolin(midi, start, dur, peak);
-    return this.scheduleOsc(midi, start, dur, peak);
+    const w = wave || this.wave;
+    if (w === 'piano') return this.schedulePiano(midi, start, dur, peak);
+    if (w === 'violin') return this.scheduleViolin(midi, start, dur, peak);
+    if (w === 'horn') return this.scheduleHorn(midi, start, dur, peak);
+    if (w === 'guitar') return this.scheduleGuitar(midi, start, dur, peak);
+    if (w === 'flute') return this.scheduleFlute(midi, start, dur, peak);
+    return this.scheduleOsc(midi, start, dur, peak, w);
   }
 
   // 通用 ADSR-ish 包络节点(平台型: 起音→持续→释音), 连到主输出
@@ -65,11 +68,11 @@ class AudioEngine {
     return g;
   }
 
-  scheduleOsc(midi, start, dur, peak) {
+  scheduleOsc(midi, start, dur, peak, wave) {
     const ctx = this.ctx;
     const g = this.basicEnv(start, dur, peak);
     const o = ctx.createOscillator();
-    o.type = this.wave;
+    o.type = wave || this.wave;
     o.frequency.value = this.midiToFreq(midi);
     o.connect(g); o.start(start); o.stop(start + dur + 0.05);
     this.scheduled.push(o);
@@ -133,25 +136,124 @@ class AudioEngine {
     this.scheduled.push(o, lfo);
   }
 
-  // voices: [{ events, gain? }]  多声部同时播放
+  getNoiseBuffer() {
+    if (!this._noiseBuf) {
+      const ctx = this.ctx;
+      const len = ctx.sampleRate;
+      this._noiseBuf = ctx.createBuffer(1, len, ctx.sampleRate);
+      const d = this._noiseBuf.getChannelData(0);
+      for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+    }
+    return this._noiseBuf;
+  }
+
+  scheduleHorn(midi, start, dur, peak) {
+    const ctx = this.ctx;
+    const f = this.midiToFreq(midi);
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass'; lp.frequency.value = Math.min(3000, f * 5); lp.Q.value = 0.7;
+    const g = ctx.createGain();
+    const p = peak * 0.55;
+    const a = Math.min(0.05, dur * 0.3), r = Math.min(0.12, dur * 0.3);
+    g.gain.setValueAtTime(0, start);
+    g.gain.linearRampToValueAtTime(p, start + a);
+    g.gain.setValueAtTime(p, start + Math.max(a, dur - r));
+    g.gain.linearRampToValueAtTime(0, start + dur);
+    lp.connect(g); g.connect(this.master);
+    let fund;
+    for (const [mult, amt] of [[1, 1], [2, 0.45], [3, 0.2], [4, 0.12]]) {
+      const o = ctx.createOscillator(); o.type = 'sine'; o.frequency.value = f * mult;
+      const pg = ctx.createGain(); pg.gain.value = amt;
+      o.connect(pg); pg.connect(lp);
+      o.start(start); o.stop(start + dur + 0.1);
+      this.scheduled.push(o);
+      if (mult === 1) fund = o;
+    }
+    const lfo = ctx.createOscillator(); lfo.type = 'sine'; lfo.frequency.value = 4.5;
+    const lg = ctx.createGain(); lg.gain.value = f * 0.004;
+    lfo.connect(lg); lg.connect(fund.frequency);
+    lfo.start(start); lfo.stop(start + dur + 0.1);
+    this.scheduled.push(lfo);
+  }
+
+  scheduleGuitar(midi, start, dur, peak) {
+    const ctx = this.ctx;
+    const f = this.midiToFreq(midi);
+    const lp = ctx.createBiquadFilter(); lp.type = 'lowpass';
+    lp.frequency.setValueAtTime(Math.min(8000, f * 8), start);
+    lp.frequency.exponentialRampToValueAtTime(Math.max(400, f * 1.5), start + Math.min(dur, 0.8));
+    const g = ctx.createGain();
+    const p = peak * 0.8;
+    g.gain.setValueAtTime(0, start);
+    g.gain.linearRampToValueAtTime(p, start + 0.003);
+    g.gain.exponentialRampToValueAtTime(Math.max(0.001, p * 0.02), start + Math.min(dur * 0.85, 1.2) + 0.01);
+    g.gain.linearRampToValueAtTime(0, start + dur);
+    lp.connect(g); g.connect(this.master);
+    for (const [mult, amt, type] of [[1, 1, 'triangle'], [2, 0.5, 'sine'], [3, 0.25, 'sine'], [4, 0.12, 'sine'], [5, 0.06, 'sine']]) {
+      const o = ctx.createOscillator(); o.type = type; o.frequency.value = f * mult;
+      const pg = ctx.createGain(); pg.gain.value = amt;
+      o.connect(pg); pg.connect(lp);
+      o.start(start); o.stop(start + dur + 0.1);
+      this.scheduled.push(o);
+    }
+  }
+
+  scheduleFlute(midi, start, dur, peak) {
+    const ctx = this.ctx;
+    const f = this.midiToFreq(midi);
+    const g = ctx.createGain();
+    const p = peak * 0.5;
+    const a = Math.min(0.04, dur * 0.25), r = Math.min(0.1, dur * 0.3);
+    g.gain.setValueAtTime(0, start);
+    g.gain.linearRampToValueAtTime(p, start + a);
+    g.gain.setValueAtTime(p, start + Math.max(a, dur - r));
+    g.gain.linearRampToValueAtTime(0, start + dur);
+    g.connect(this.master);
+    const o = ctx.createOscillator(); o.type = 'sine'; o.frequency.value = f;
+    o.connect(g); o.start(start); o.stop(start + dur + 0.1);
+    this.scheduled.push(o);
+    const o2 = ctx.createOscillator(); o2.type = 'sine'; o2.frequency.value = f * 2;
+    const g2 = ctx.createGain(); g2.gain.value = 0.12;
+    o2.connect(g2); g2.connect(g); o2.start(start); o2.stop(start + dur + 0.1);
+    this.scheduled.push(o2);
+    const lfo = ctx.createOscillator(); lfo.type = 'sine'; lfo.frequency.value = 5;
+    const lg = ctx.createGain(); lg.gain.value = f * 0.005;
+    lfo.connect(lg); lg.connect(o.frequency);
+    lfo.start(start); lfo.stop(start + dur + 0.1);
+    this.scheduled.push(lfo);
+    const noise = ctx.createBufferSource(); noise.buffer = this.getNoiseBuffer(); noise.loop = true;
+    const ng = ctx.createGain(); ng.gain.value = 0.03;
+    const nlp = ctx.createBiquadFilter(); nlp.type = 'bandpass'; nlp.frequency.value = f; nlp.Q.value = 2;
+    noise.connect(ng); ng.connect(nlp); nlp.connect(g);
+    noise.start(start); noise.stop(start + dur + 0.1);
+    this.scheduled.push(noise);
+  }
+
+  // voices: [{ events, gain?, wave? }]  多声部同时播放
   // onTick(activeIdxPerVoice, beat) 高亮回调; onEnd 结束回调
-  play(voices, bpm, onTick, onEnd) {
+  // fromBeat: 从第几拍开始播放 (默认 0 = 开头)
+  async play(voices, bpm, onTick, onEnd, fromBeat) {
     this.stop();
     const ctx = this.ensure();
-    if (ctx.state === 'suspended') ctx.resume();
+    if (ctx.state !== 'running') { try { await ctx.resume(); } catch (e) {} }
     this.playing = true;
+    fromBeat = fromBeat || 0;
 
-    const spb = 60 / bpm;               // 每拍秒数
-    const t0 = ctx.currentTime + 0.05;  // 调度前瞻: 够稳又跟手
+    const spb = 60 / bpm;
+    const t0 = ctx.currentTime + 0.06;
     let lastEnd = t0;
 
     voices.forEach((voice) => {
       const vg = voice.gain == null ? 1 : voice.gain;
+      const vw = voice.wave;
       for (const ev of voice.events) {
         if (ev.type !== 'note') continue;
-        const start = t0 + ev.startBeat * spb;
-        const dur = ev.durBeats * spb;
-        this.scheduleNote(ev.midi, start, dur, vg);
+        const evEnd = ev.startBeat + ev.durBeats;
+        if (evEnd <= fromBeat) continue;
+        const noteStart = Math.max(ev.startBeat, fromBeat);
+        const start = t0 + (noteStart - fromBeat) * spb;
+        const dur = (evEnd - noteStart) * spb;
+        this.scheduleNote(ev.midi, start, dur, vg, vw);
         lastEnd = Math.max(lastEnd, start + dur);
       }
     });
@@ -159,7 +261,7 @@ class AudioEngine {
     const tick = () => {
       if (!this.playing) return;
       const now = ctx.currentTime;
-      const beat = (now - t0) / spb;
+      const beat = fromBeat + (now - t0) / spb;
       const active = voices.map((voice) => {
         for (let k = 0; k < voice.events.length; k++) {
           const e = voice.events[k];

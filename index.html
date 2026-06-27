@@ -23,10 +23,17 @@
   #voices { display: flex; flex-direction: column; gap: 8px; }
   .voicerow-edit { display: flex; align-items: stretch; gap: 8px; }
   .voicerow-edit .vtag {
-    flex: 0 0 56px; display: flex; align-items: center; justify-content: center;
-    border-radius: 8px; font-size: 12px; font-weight: 700; text-align: center;
+    flex: 0 0 62px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px;
+    border-radius: 8px; padding: 5px 2px;
     background: var(--panel); border: 1px solid var(--line);
   }
+  .voicerow-edit .vtag .vname { font-size: 12px; font-weight: 700; }
+  .voicerow-edit .vtag .vwave {
+    width: 54px; font-size: 10px; padding: 1px 2px;
+    background: transparent; color: inherit; border: 1px solid var(--line);
+    border-radius: 3px; cursor: pointer;
+  }
+  .voicerow-edit .vtag .vvol { width: 52px; height: 13px; cursor: pointer; accent-color: currentColor; }
   .voicerow-edit textarea {
     flex: 1; min-height: 46px; resize: vertical;
     background: var(--panel); color: var(--fg); border: 1px solid var(--line);
@@ -86,6 +93,9 @@
   .block .lab { font-size: 15px; }
   .block .sub { font-size: 10px; font-weight: 500; opacity: .7; }
   .block.active { transform: translateY(-4px); box-shadow: 0 0 0 2px var(--fg), 0 6px 16px rgba(0,0,0,.4); z-index: 1; }
+  .barline-ov { position: absolute; top: 0; bottom: 0; width: 0; border-left: 2px solid #586079; pointer-events: none; z-index: 2; }
+  .barnum { position: absolute; top: 0; font-size: 10px; color: var(--muted); pointer-events: none; }
+  .barruler { margin-bottom: 0; }
 
   /* 钢琴卷帘 */
   .prwrap { display: flex; align-items: stretch; }
@@ -100,6 +110,33 @@
   .snote.active line { stroke: var(--fg); }
   .srest.active { fill: var(--fg); }
 
+  /* 移动端适配 */
+  @media (max-width: 600px) {
+    body { padding: 10px; }
+    h1 { font-size: 17px; }
+    .hint { font-size: 11px; margin-bottom: 8px; }
+    .voicerow-edit .vtag { flex: 0 0 54px; gap: 2px; padding: 3px 1px; }
+    .voicerow-edit .vtag .vname { font-size: 10px; }
+    .voicerow-edit .vtag .vwave { width: 46px; font-size: 9px; }
+    .voicerow-edit .vtag .vvol { width: 44px; height: 12px; }
+    .voicerow-edit textarea { font-size: 13px; padding: 6px 8px; min-height: 40px; }
+    .voicerow-edit.melody textarea { min-height: 52px; }
+    .voicerow-edit .del { flex: 0 0 26px; font-size: 12px; }
+    .rowbtns { flex-wrap: wrap; gap: 6px; margin: 6px 0 4px; }
+    button, select, input[type=number] { padding: 7px 10px; font-size: 13px; }
+    .controls { gap: 6px; }
+    label.field { font-size: 11px; gap: 4px; }
+    input[type=number] { width: 48px; padding: 6px 8px; }
+    .sep { flex-basis: 100%; height: 0; }
+    #viz { padding: 4px; border-radius: 8px; }
+    .vlabel { flex: 0 0 32px; font-size: 10px; }
+    .block .lab { font-size: 12px; }
+    .block .sub { font-size: 8px; }
+    .barnum { font-size: 9px; }
+    details { font-size: 12px; }
+    td { padding: 2px 8px 2px 0; font-size: 12px; }
+  }
+
   details { margin-top: 18px; color: var(--muted); font-size: 13px; }
   summary { cursor: pointer; color: var(--fg); }
   table { border-collapse: collapse; margin-top: 8px; }
@@ -109,7 +146,7 @@
 </head>
 <body>
   <h1>AutoMusician · 旋律配和声</h1>
-  <p class="hint">记谱：<code>1-7</code> 唱名 · <code>0</code> 休止 · 重复=延长 · <code>'</code> 断开 · <code>[ ]</code> 占两拍的连音 · <code>+/-</code> 从此处起升/降八度 · 字母=钢琴键(<code>QWRTYIO</code>黑键 · <code>C-G A B</code>低音 · <code>8 9 P</code>高音) · <code>#/b</code> 升降 ·<code>|</code> 小节线(仅装饰) · 旋律首行(必填) <code>1=G 120</code></p>
+  <p class="hint">记谱：<code>1-7</code> 唱名 · <code>0</code> 休止 · 重复=延长 · <code>.</code> 附点 · <code>'</code> 断开 ·<code>[ ]</code> 占两拍的连音 · <code>+/-</code> 从此处起升/降八度 · 字母=钢琴键(<code>QWRTYIO</code>黑键 · <code>C-G A B</code>低音 · <code>8 9 P</code>高音) · <code>#/b</code> 升降 ·<code>|</code> 小节线(仅装饰) · 旋律首行(必填) <code>1=G 120</code></p>
 
   <div id="voices"></div>
 
@@ -124,8 +161,11 @@
       </select>
     </label>
     <span class="sep"></span>
-    <button id="addBars" class="ghost">▮ 加小节线</button>
-    <label class="field">每 <input type="number" id="barBeats" value="4" min="1" max="16" /> 拍</label>
+    <label class="field">每小节 <input type="number" id="barBeats" value="4" min="0" max="16" /> 拍</label>
+    <label class="field">挂拍 <input type="number" id="pickup" value="0" min="0" max="15" /> 拍</label>
+    <button id="exportBtn" class="ghost" title="导出当前旋律和设置为文件">⬇ 导出</button>
+    <button id="importBtn" class="ghost" title="从文件导入旋律和设置">⬆ 导入</button>
+    <input type="file" id="importFile" accept=".json" style="display:none" />
     <button id="resetDemo" class="ghost" title="清空本地存档并恢复默认示例">↺ 重置</button>
   </div>
 
@@ -149,6 +189,9 @@
         <option value="sine">正弦波</option>
         <option value="piano">钢琴 (合成)</option>
         <option value="violin">提琴 (合成)</option>
+        <option value="horn">圆号 (合成)</option>
+        <option value="guitar">吉他 (合成)</option>
+        <option value="flute">长笛 (合成)</option>
       </select>
     </label>
     <label class="field">采样 <input type="file" id="sample" accept="audio/*" style="max-width:140px" /></label>
@@ -165,6 +208,7 @@
       <tr><td><code>1 2 3 4 5 6 7</code></td><td>do re mi fa sol la si（相对调号）</td></tr>
       <tr><td><code>0</code></td><td>休止符</td></tr>
       <tr><td><code>111</code></td><td>do 持续 3 拍（紧贴重复 = 延长）</td></tr>
+      <tr><td><code>1.</code> / <code>1..</code></td><td>附点：时值 ×1.5 / ×1.75（<code>1.</code>=1.5 拍，<code>11.</code>=3 拍）</td></tr>
       <tr><td><code>1'1</code></td><td>两个各 1 拍的 do（<code>'</code> 断开 / 重新触发）</td></tr>
       <tr><td><code>12</code></td><td>不同音天然分开，无需分隔符</td></tr>
       <tr><td>空格</td><td>仅作排版，被忽略（<code>1 1</code> 等同 <code>11</code>）</td></tr>

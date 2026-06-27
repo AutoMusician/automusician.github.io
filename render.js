@@ -22,6 +22,18 @@ function hdiv(cls, parent) {
 }
 function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
 
+// 小节线位置(拍): 固定拍数 + 挂拍偏移(第一小节可不完整); barBeats<=0 时回退到手写 |
+function barPositions(opts, voices, totalBeats) {
+  const o = opts || {};
+  const bb = o.barBeats || 0;
+  if (bb <= 0) return (voices[0] && voices[0].model.bars) || [];
+  const pickup = ((((o.pickup || 0) % bb) + bb) % bb); // 规范到 [0, bb)
+  const first = pickup > 0 ? pickup : bb;              // 第一条小节线: 挂拍处, 或一个整小节后
+  const out = [];
+  for (let b = first; b < totalBeats - 1e-6; b += bb) out.push(b);
+  return out;
+}
+
 // 高亮器: 按 data-v / data-i 切换 .active
 function makeHighlight(root) {
   let prev = [];
@@ -47,18 +59,25 @@ function diatonic(name) {
 }
 
 /* ---------- 视图 1: 色块 (连续平滑滚动) ---------- */
-function renderBlocks(container, voices) {
+function renderBlocks(container, voices, opts) {
   const UNIT = 32; // px/拍: 固定单位宽度 -> 同时值同宽、跨声部按时间对齐
-  const bars0 = (voices[0] && voices[0].model.bars) || [];
-  const isBar = (b) => bars0.some((x) => Math.abs(x - b) < 1e-6);
+  const totalBeats = Math.max(0, ...voices.map((v) => v.model.totalBeats));
+  const bars = barPositions(opts, voices, totalBeats);
   const scroller = hdiv('scroller', container);
+  const ruler = hdiv('voicerow barruler', scroller);
+  hdiv('vlabel', ruler);
+  const rlane = hdiv('blocklane', ruler);
+  rlane.style.cssText = 'position:relative;min-height:14px;width:' + (totalBeats * UNIT) + 'px';
+  const bn0 = hdiv('barnum', rlane); bn0.textContent = '1'; bn0.style.left = '2px';
+  bars.forEach((b, idx) => { const bn = hdiv('barnum', rlane); bn.textContent = '' + (idx + 2); bn.style.left = (b * UNIT + 2) + 'px'; });
   voices.forEach((voice, v) => {
     const row = hdiv('voicerow', scroller);
     const tag = hdiv('vlabel', row);
     tag.textContent = voice.label; tag.style.color = voice.color;
     const lane = hdiv('blocklane', row);
+    lane.style.position = 'relative';
     voice.model.events.forEach((ev, i) => {
-      const b = hdiv('block' + (ev.type === 'rest' ? ' rest' : '') + (isBar(ev.startBeat) ? ' barstart' : ''), lane);
+      const b = hdiv('block' + (ev.type === 'rest' ? ' rest' : ''), lane);
       b.style.width = Math.max(3, ev.durBeats * UNIT) + 'px';
       b.style.background = ev.type === 'rest' ? 'var(--rest)' : voice.color;
       b.setAttribute('data-v', v); b.setAttribute('data-i', i);
@@ -68,6 +87,7 @@ function renderBlocks(container, voices) {
         ? '<span class="lab">𝄽</span>'
         : `<span class="lab">${ev.raw}</span><span class="sub">${ev.name}</span>`;
     });
+    bars.forEach((bl) => { const d = hdiv('barline-ov', lane); d.style.left = (bl * UNIT) + 'px'; });
   });
   const hl = makeHighlight(container);
   const ev0 = voices[0] ? voices[0].model.events : [];
@@ -89,7 +109,7 @@ function renderBlocks(container, voices) {
 }
 
 /* ---------- 视图 2: 钢琴卷帘 (连续平滑滚动 + 播放头) ---------- */
-function renderPianoRoll(container, voices) {
+function renderPianoRoll(container, voices, opts) {
   const BW = 34, ROWH = 13, KEYW = 52;
   let lo = 127, hi = 0, totalBeats = 0;
   voices.forEach((vc) => {
@@ -113,7 +133,11 @@ function renderPianoRoll(container, voices) {
   const scroller = hdiv('scroller prroll', wrap);
   const s = svg('svg', { width: W, height: H }, scroller);
   for (let m = lo; m <= hi; m++) svg('rect', { x: 0, y: yOf(m), width: W, height: ROWH, fill: isBlack(m) ? 'rgba(0,0,0,.22)' : 'transparent' }, s);
-  (voices[0] ? voices[0].model.bars : []).forEach((b) => svg('line', { x1: b * BW, y1: 0, x2: b * BW, y2: H, stroke: '#3a3f4d', 'stroke-dasharray': '2 3' }, s));
+  svg('text', { x: 2, y: 10, fill: '#8a90a3', 'font-size': 9, 'font-family': 'sans-serif' }, s).textContent = '1';
+  barPositions(opts, voices, totalBeats).forEach((b, idx) => {
+    svg('line', { x1: b * BW, y1: 0, x2: b * BW, y2: H, stroke: '#5a6076', 'stroke-width': 1 }, s);
+    svg('text', { x: b * BW + 2, y: 10, fill: '#8a90a3', 'font-size': 9, 'font-family': 'sans-serif' }, s).textContent = '' + (idx + 2);
+  });
   voices.forEach((vc, v) => {
     vc.model.events.forEach((ev, i) => {
       if (ev.type !== 'note') return;
@@ -137,7 +161,7 @@ function renderPianoRoll(container, voices) {
 }
 
 /* ---------- 视图 3: 五线谱 (一屏一屏翻页 + 留白) ---------- */
-function renderStaff(container, voices) {
+function renderStaff(container, voices, opts) {
   const BW = 36, LEFT = 48, LINEGAP = 9, BAND = 96, TOP = 24;
   let totalBeats = 4;
   voices.forEach((vc) => { totalBeats = Math.max(totalBeats, vc.model.totalBeats); });
@@ -192,11 +216,13 @@ function renderStaff(container, voices) {
     });
   });
 
-  // 小节线: 取旋律(声部0)的小节位置, 贯穿所有谱表
+  // 小节线: 按固定拍数, 实线贯穿所有谱表, 画清晰
   const barTop = TOP, barBot = TOP + (voices.length - 1) * BAND + 4 * LINEGAP;
-  ((voices[0] && voices[0].model.bars) || []).forEach((b) => {
+  svg('text', { x: LEFT + 2, y: barTop - 4, fill: '#8a90a3', 'font-size': 10, 'font-family': 'sans-serif' }, s).textContent = '1';
+  barPositions(opts, voices, totalBeats).forEach((b, idx) => {
     const x = LEFT + b * BW;
-    svg('line', { x1: x, y1: barTop, x2: x, y2: barBot, stroke: '#586079', 'stroke-dasharray': '3 3' }, s);
+    svg('line', { x1: x, y1: barTop, x2: x, y2: barBot, stroke: '#aab0c4', 'stroke-width': 1.6 }, s);
+    svg('text', { x: x + 2, y: barTop - 4, fill: '#8a90a3', 'font-size': 10, 'font-family': 'sans-serif' }, s).textContent = '' + (idx + 2);
   });
 
   const hl = makeHighlight(container);
@@ -209,11 +235,11 @@ function renderStaff(container, voices) {
   };
 }
 
-function renderView(container, voices, mode) {
+function renderView(container, voices, mode, opts) {
   container.innerHTML = '';
-  if (mode === 'piano') return renderPianoRoll(container, voices);
-  if (mode === 'staff') return renderStaff(container, voices);
-  return renderBlocks(container, voices);
+  if (mode === 'piano') return renderPianoRoll(container, voices, opts);
+  if (mode === 'staff') return renderStaff(container, voices, opts);
+  return renderBlocks(container, voices, opts);
 }
 
 if (typeof window !== 'undefined') window.renderView = renderView;

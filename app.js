@@ -24,14 +24,19 @@ const clearSampleBtn = $('clearSample');
 let rows = [];        // 声部编辑行: [{ wrap, textarea }]
 let setActive = null; // 当前视图的高亮函数
 let parsed = [];      // 最近一次解析的声部 [{ label, color, model }]
+let playFromBeat = 0; // 从第几拍开始播放 (点击可视化音符设置)
+
+function updatePlayBtn() {
+  playBtn.textContent = playFromBeat > 0 ? `▶ 从第${Math.round(playFromBeat * 10) / 10}拍` : '▶ 播放';
+}
 
 /* ---------- 本地存储: 刷新后自动恢复 ---------- */
 const STORE_KEY = 'automusician.v1';
 function saveState() {
   try {
     localStorage.setItem(STORE_KEY, JSON.stringify({
-      rows: rows.map((r) => ({ text: r.textarea.value, label: r.label || null, auto: !!r.auto })),
-      view: viewSel.value, wave: waveSel.value, harmTex: harmTexSel.value, barBeats: $('barBeats').value,
+      rows: rows.map((r) => ({ text: r.textarea.value, label: r.label || null, auto: !!r.auto, vol: +r.volEl.value, wave: r.waveEl.value })),
+      view: viewSel.value, wave: waveSel.value, harmTex: harmTexSel.value, barBeats: $('barBeats').value, pickup: $('pickup').value,
     }));
   } catch (e) { /* localStorage 不可用时静默忽略 */ }
 }
@@ -46,7 +51,7 @@ function rowLabel(i) {
 }
 function relabel() {
   rows.forEach((r, i) => {
-    r.tag.textContent = rowLabel(i);
+    r.nameEl.textContent = rowLabel(i);
     r.tag.style.color = COLORS[i % COLORS.length];
     r.del.classList.toggle('hidden', i === 0); // 旋律行不可删
   });
@@ -56,7 +61,16 @@ function addRow(text, opts) {
   const isMelody = rows.length === 0; // 第一行 = 旋律
   const wrap = document.createElement('div');
   wrap.className = 'voicerow-edit' + (isMelody ? ' melody' : '');
+  // 左列: 声部名 + 音量滑块
   const tag = document.createElement('div'); tag.className = 'vtag';
+  const nameEl = document.createElement('span'); nameEl.className = 'vname';
+  const waveEl = document.createElement('select'); waveEl.className = 'vwave'; waveEl.title = '音色';
+  waveEl.innerHTML = '<option value="piano">钢琴</option><option value="violin">提琴</option><option value="horn">圆号</option><option value="guitar">吉他</option><option value="flute">长笛</option><option value="square">方波</option><option value="triangle">三角</option><option value="sawtooth">锯齿</option><option value="sine">正弦</option>';
+  waveEl.value = (opts && opts.wave) || waveSel.value;
+  const volEl = document.createElement('input');
+  volEl.type = 'range'; volEl.className = 'vvol'; volEl.min = 0; volEl.max = 100; volEl.title = '音量';
+  volEl.value = (opts && opts.vol != null) ? opts.vol : (isMelody ? 100 : 70);
+  tag.append(nameEl, waveEl, volEl);
   const ta = document.createElement('textarea'); ta.spellcheck = false; ta.value = text || '';
   ta.placeholder = isMelody
     ? '在此输入旋律 · 例：1=C 72 ↵ 1 1 5 5 6 6 5'
@@ -66,11 +80,13 @@ function addRow(text, opts) {
   wrap.append(tag, ta, del);
   voicesBox.appendChild(wrap);
 
-  const row = { wrap, textarea: ta, tag, del, auto: !!(opts && opts.auto), label: opts && opts.label };
+  const row = { wrap, textarea: ta, tag, nameEl, waveEl, volEl, del, auto: !!(opts && opts.auto), label: opts && opts.label };
   rows.push(row);
 
   let t;
   ta.addEventListener('input', () => { clearTimeout(t); t = setTimeout(renderAll, 120); });
+  waveEl.addEventListener('change', saveState);
+  volEl.addEventListener('input', saveState);
   del.addEventListener('click', () => {
     rows = rows.filter((r) => r !== row);
     wrap.remove();
@@ -94,9 +110,13 @@ function collectVoices() {
 
 /* ---------- 渲染 ---------- */
 function renderAll() {
+  const oldScroller = viz.querySelector('.scroller');
+  const scrollLeft = oldScroller ? oldScroller.scrollLeft : 0;
   const { voices, key, bpm } = collectVoices();
   parsed = voices;
-  setActive = renderView(viz, voices, viewSel.value);
+  setActive = renderView(viz, voices, viewSel.value, { barBeats: +$('barBeats').value || 0, pickup: +$('pickup').value || 0 });
+  const newScroller = viz.querySelector('.scroller');
+  if (newScroller && scrollLeft) newScroller.scrollLeft = scrollLeft;
 
   const errs = [];
   voices.forEach((v) => v.model.errors.forEach((e) => errs.push(`[${v.label}] ${e}`)));
@@ -115,13 +135,13 @@ function onPlay() {
   if (!playable.length) { status.textContent = '没有可播放的音符'; return; }
   engine.wave = waveSel.value;
   const bpm = parsed[0].model.bpm;
-  const nH = Math.max(1, parsed.length - 1);
-  const hg = 0.7 / Math.sqrt(nH); // 声部越多, 每个和声声部音量越低, 避免压过旋律
-  const voiceEvents = parsed.map((v, i) => ({ events: v.model.events, gain: i === 0 ? 1 : hg }));
+  const voiceEvents = parsed.map((v, i) => ({ events: v.model.events, gain: (rows[i] ? +rows[i].volEl.value : 100) / 100, wave: rows[i] ? rows[i].waveEl.value : waveSel.value }));
   playBtn.disabled = true; stopBtn.disabled = false;
+  const from = playFromBeat;
   engine.play(voiceEvents, bpm,
     (active, beat) => { if (setActive) setActive(active, beat); },
-    () => { playBtn.disabled = false; stopBtn.disabled = true; if (setActive) setActive(parsed.map(() => -1)); });
+    () => { playFromBeat = 0; updatePlayBtn(); playBtn.disabled = false; stopBtn.disabled = true; if (setActive) setActive(parsed.map(() => -1)); },
+    from);
 }
 
 function onStop() {
@@ -136,54 +156,102 @@ $('addVoice').addEventListener('click', () => { addRow(''); renderAll(); });
 function runAutoHarmonize() {
   const m0 = parseMelody(rows[0].textarea.value);
   if (m0.totalBeats <= 0) { status.textContent = '旋律为空, 无法配和声'; return; }
-  // 移除上一次自动生成的行, 再插入新的(可重复点击/切织体不堆积)
-  rows.filter((r) => r.auto).forEach((r) => r.wrap.remove());
-  rows = rows.filter((r) => !r.auto);
+  // 追加新的和声声部, 不删除已有的(手写或之前生成的都保留)
   const { rows: hrows, chords } = autoHarmonize(m0, { texture: harmTexSel.value });
   hrows.forEach((hr) => addRow(hr.text, { auto: true, label: hr.label }));
   relabel();
   renderAll();
   status.className = 'status';
   const tex = harmTexSel.selectedOptions[0].textContent;
-  status.textContent = `✨ 自动和声 (${tex}, 可编辑) · 进行: ${chords.join(' - ')}`;
+  status.textContent = `✨ 已追加和声 (${tex}) · 进行: ${chords.join(' - ')}`;
 }
 $('autoHarm').addEventListener('click', runAutoHarmonize);
-harmTexSel.addEventListener('change', () => { if (rows.some((r) => r.auto)) runAutoHarmonize(); });
 
-// 点击视图中的音符 -> 在对应声部的文本框里选中其源文字
+// 调整每小节拍数/挂拍时: 删除各声部原有的 |, 再按固定拍位(含挂拍偏移)重新插入 |
+function applyBarlines() {
+  const bb = +$('barBeats').value || 0;
+  const pickup = ((((+$('pickup').value || 0) % bb) + bb) % bb) || 0; // bb=0 时为 NaN%, 下面会跳过
+  const m0 = parseMelody(rows[0].textarea.value.replace(/\|/g, ''));
+  rows.forEach((row, vi) => {
+    let text = row.textarea.value.replace(/\|/g, ''); // 删除原来的 |
+    if (bb > 0) {
+      const model = vi === 0 ? parseMelody(text) : parseMelody(text, { key: m0.key, bpm: m0.bpm, bodyOnly: true });
+      const first = pickup > 0 ? pickup : bb;
+      const boundaries = [];
+      for (let b = first; b < model.totalBeats - 1e-6; b += bb) boundaries.push(b);
+      const inserts = [];
+      let bi = 0;
+      for (const ev of model.events) {
+        let crossed = false;
+        while (bi < boundaries.length && ev.startBeat >= boundaries[bi] - 1e-6) { bi++; crossed = true; }
+        if (crossed && ev.srcStart != null) inserts.push(ev.srcStart);
+      }
+      inserts.sort((a, b) => b - a);
+      for (const p of inserts) text = text.slice(0, p) + '|' + text.slice(p);
+    }
+    row.textarea.value = text;
+  });
+  renderAll();
+}
+
+// 点击视图中的音符 -> 选中源文字 + 设置播放起始位置
 viz.addEventListener('click', (e) => {
   const el = e.target.closest && e.target.closest('[data-v][data-s]');
-  if (!el) return;
+  if (!el) { playFromBeat = 0; updatePlayBtn(); return; }
   const v = +el.getAttribute('data-v');
+  const i = el.getAttribute('data-i');
   const s = +el.getAttribute('data-s'), en = +el.getAttribute('data-e');
   const row = rows[v];
   if (!row || isNaN(s)) return;
   row.textarea.focus();
   row.textarea.setSelectionRange(s, en);
+  if (i != null && parsed[v] && parsed[v].model.events[+i]) {
+    playFromBeat = parsed[v].model.events[+i].startBeat;
+    updatePlayBtn();
+  }
 });
 
-// 自动按固定拍数加小节线(写入旋律文本; 各视图据旋律小节位置绘制)
-function addBarlines() {
-  const n = Math.max(1, Math.round(+$('barBeats').value || 4));
-  let text = rows[0].textarea.value.replace(/\|/g, ''); // 先清除已有, 可重复点击不叠加
-  const model = parseMelody(text);
-  const boundaries = [];
-  for (let b = n; b < model.totalBeats - 1e-6; b += n) boundaries.push(b);
-  const inserts = [];
-  let bi = 0;
-  for (const ev of model.events) {
-    let crossed = false;
-    while (bi < boundaries.length && ev.startBeat >= boundaries[bi] - 1e-6) { bi++; crossed = true; }
-    if (crossed && ev.srcStart != null) inserts.push(ev.srcStart);
-  }
-  inserts.sort((a, b) => b - a); // 从后往前插, 保持偏移有效
-  for (const p of inserts) text = text.slice(0, p) + '|' + text.slice(p);
-  rows[0].textarea.value = text;
-  renderAll();
-  status.className = 'status';
-  status.textContent = `已按每 ${n} 拍加小节线 · 共 ${inserts.length} 条`;
-}
-$('addBars').addEventListener('click', addBarlines);
+// 导出/导入
+$('exportBtn').addEventListener('click', () => {
+  const state = {
+    rows: rows.map((r) => ({ text: r.textarea.value, label: r.label || null, auto: !!r.auto, vol: +r.volEl.value })),
+    view: viewSel.value, wave: waveSel.value, harmTex: harmTexSel.value,
+    barBeats: $('barBeats').value, pickup: $('pickup').value,
+  };
+  const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'automusician-' + new Date().toISOString().slice(0, 10) + '.json';
+  a.click();
+  URL.revokeObjectURL(a.href);
+});
+$('importBtn').addEventListener('click', () => $('importFile').click());
+$('importFile').addEventListener('change', () => {
+  const f = $('importFile').files[0];
+  if (!f) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const saved = JSON.parse(reader.result);
+      rows.slice().forEach((r) => r.wrap.remove());
+      rows = [];
+      if (saved.rows) saved.rows.forEach((r) => addRow(r.text, { auto: r.auto, label: r.label, vol: r.vol, wave: r.wave }));
+      if (saved.view) viewSel.value = saved.view;
+      if (saved.wave) { waveSel.value = saved.wave; engine.wave = saved.wave; }
+      if (saved.harmTex) harmTexSel.value = saved.harmTex;
+      if (saved.barBeats) $('barBeats').value = saved.barBeats;
+      if (saved.pickup != null) $('pickup').value = saved.pickup;
+      relabel(); renderAll();
+      status.className = 'status';
+      status.textContent = '已导入: ' + f.name;
+    } catch (e) {
+      status.className = 'status err';
+      status.textContent = '导入失败: ' + e.message;
+    }
+  };
+  reader.readAsText(f);
+  $('importFile').value = '';
+});
 
 // 重置: 清空本地存档, 恢复默认示例与默认设置
 $('resetDemo').addEventListener('click', () => {
@@ -196,6 +264,7 @@ $('resetDemo').addEventListener('click', () => {
   waveSel.value = 'square'; engine.wave = 'square';
   harmTexSel.value = 'block';
   $('barBeats').value = '4';
+  $('pickup').value = '0';
   relabel();
   renderAll();
 });
@@ -205,12 +274,13 @@ stopBtn.addEventListener('click', onStop);
 viewSel.addEventListener('change', renderAll);
 waveSel.addEventListener('change', () => { engine.wave = waveSel.value; saveState(); });
 harmTexSel.addEventListener('change', saveState);
-$('barBeats').addEventListener('change', saveState);
+$('barBeats').addEventListener('change', applyBarlines); // 改拍数 -> 各声部重写 |
+$('pickup').addEventListener('change', applyBarlines);   // 改挂拍 -> 同上
 window.addEventListener('beforeunload', saveState);
 
-testToneBtn.addEventListener('click', () => {
+testToneBtn.addEventListener('click', async () => {
   engine.wave = waveSel.value;
-  const st = engine.testBeep();
+  const st = await engine.testBeep();
   if (st === 'running') {
     status.className = 'status';
     status.textContent = '🔊 已发出测试音 (A4) · 没听到请检查系统音量, 或在真实浏览器打开 http://localhost:5510';
@@ -241,7 +311,7 @@ clearSampleBtn.addEventListener('click', () => {
 });
 
 // 预热: 首次任意交互就建好音频上下文, 消除冷启动延迟
-function warmup() { const ctx = engine.ensure(); if (ctx.state === 'suspended') ctx.resume(); }
+function warmup() { const ctx = engine.ensure(); if (ctx.state !== 'running') ctx.resume(); }
 window.addEventListener('pointerdown', warmup, { once: true });
 window.addEventListener('keydown', warmup, { once: true });
 
@@ -255,11 +325,12 @@ document.addEventListener('keydown', (e) => {
 // 初始: 有本地存档则恢复, 否则用默认示例
 const saved = loadState();
 if (saved && Array.isArray(saved.rows) && saved.rows.length) {
-  saved.rows.forEach((r) => addRow(r.text, { auto: r.auto, label: r.label || undefined }));
+  saved.rows.forEach((r) => addRow(r.text, { auto: r.auto, label: r.label || undefined, vol: r.vol, wave: r.wave }));
   if (saved.view) viewSel.value = saved.view;
   if (saved.wave) { waveSel.value = saved.wave; engine.wave = saved.wave; }
   if (saved.harmTex) harmTexSel.value = saved.harmTex;
   if (saved.barBeats) $('barBeats').value = saved.barBeats;
+  if (saved.pickup != null) $('pickup').value = saved.pickup;
 } else {
   addRow(MELODY_DEMO);
 }

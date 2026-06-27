@@ -87,6 +87,7 @@ function tokenize(str, errors, base) {
     if (c === '|') { tokens.push({ kind: 'bar' }); i++; continue; }              // 小节线, 纯装饰
     if (c === '[') { tokens.push({ kind: 'bopen' }); i++; continue; }
     if (c === ']') { tokens.push({ kind: 'bclose' }); i++; continue; }
+    if (c === '.') { tokens.push({ kind: 'dot', pos: at, end: at + 1 }); i++; continue; } // 附点: 时值 ×1.5
     // +/- 是独立的移调记号: 从此处起累积升/降八度, 影响后续所有音
     if (c === '+') { tokens.push({ kind: 'octup' }); i++; continue; }
     if (c === '-') { tokens.push({ kind: 'octdown' }); i++; continue; }
@@ -125,7 +126,10 @@ function resolveOctaves(tokens) {
   return out;
 }
 
-// 把一段 note/sep token 按"相邻相同记号"合并成 (token, 占用槽数) 列表
+// 附点系数: 1 个点 ×1.5, 2 个点 ×1.75 ...
+function dotFactor(dots) { return 2 - Math.pow(0.5, dots); }
+
+// 把一段 note/sep token 按"相邻相同记号"合并, 并吞掉后随的附点; 返回每组的时值权重
 function mergeRuns(list) {
   const out = [];
   let k = 0;
@@ -138,8 +142,10 @@ function mergeRuns(list) {
       if (list[j].kind === 'note' && noteKey(list[j]) === noteKey(t)) { len++; last = j; j++; }
       else break;
     }
-    out.push({ tok: t, len, srcStart: t.pos, srcEnd: list[last].end });
-    k = last + 1;
+    let dots = 0, m = last + 1;
+    while (m < list.length && list[m].kind === 'dot') { dots++; m++; }
+    out.push({ tok: t, weight: len * dotFactor(dots), srcStart: t.pos, srcEnd: dots ? list[m - 1].end : list[last].end });
+    k = m;
   }
   return out;
 }
@@ -163,25 +169,39 @@ function makeEvent(t, startBeat, durBeats, root) {
 function build(tokens, root, errors) {
   const events = [];
   const bars = [];
-  let beat = 0, i = 0;
+  let beat = 0, i = 0, lastWasSep = false;
   while (i < tokens.length) {
     const t = tokens[i];
-    if (t.kind === 'sep') { i++; continue; }
+    if (t.kind === 'sep') { lastWasSep = true; i++; continue; }
     if (t.kind === 'bar') { bars.push(beat); i++; continue; }
     if (t.kind === 'bclose') { errors.push('多余的 "]"'); i++; continue; }
     if (t.kind === 'bopen') {
+      const sepBefore = lastWasSep;
+      lastWasSep = false;
       const inner = [];
       i++;
       while (i < tokens.length && tokens[i].kind !== 'bclose') { inner.push(tokens[i]); i++; }
       if (i >= tokens.length) errors.push('"[" 没有匹配的 "]"');
-      else i++; // 跳过 bclose
+      else i++;
+      let innerSep = false;
+      for (const tt of inner) { if (tt.kind === 'note') break; if (tt.kind === 'sep') { innerSep = true; break; } }
       const groups = mergeRuns(inner);
-      const totalSlots = groups.reduce((s, g) => s + g.len, 0) || 1;
+      const totalSlots = groups.reduce((s, g) => s + g.weight, 0) || 1;
       let local = beat;
-      for (const g of groups) {
-        const dur = 2 * g.len / totalSlots; // 整个方框固定 2 拍
+      for (let gi = 0; gi < groups.length; gi++) {
+        const g = groups[gi];
+        const dur = 2 * g.weight / totalSlots;
         const ev = makeEvent(g.tok, local, dur, root);
         ev.srcStart = g.srcStart; ev.srcEnd = g.srcEnd;
+        if (gi === 0 && !sepBefore && !innerSep && events.length > 0) {
+          const prev = events[events.length - 1];
+          if (prev.type === 'note' && ev.type === 'note' && prev.midi === ev.midi) {
+            prev.durBeats += dur;
+            prev.srcEnd = ev.srcEnd;
+            local += dur;
+            continue;
+          }
+        }
         events.push(ev);
         local += dur;
       }
@@ -189,17 +209,33 @@ function build(tokens, root, errors) {
       continue;
     }
     if (t.kind === 'note') {
+      const hadSep = lastWasSep;
+      lastWasSep = false;
       let len = 1, j = i + 1, last = i;
       while (j < tokens.length) {
-        if (tokens[j].kind === 'bar') { j++; continue; } // 小节线透明, 不打断延音
+        if (tokens[j].kind === 'bar') { j++; continue; }
         if (tokens[j].kind === 'note' && noteKey(tokens[j]) === noteKey(t)) { len++; last = j; j++; }
         else break;
       }
-      const ev = makeEvent(t, beat, len, root); // 框外每次重复 = 1 拍
-      ev.srcStart = t.pos; ev.srcEnd = tokens[last].end;
+      let dots = 0, k = last + 1;
+      while (k < tokens.length && tokens[k].kind === 'dot') { dots++; k++; }
+      const dur = len * dotFactor(dots);
+      const ev = makeEvent(t, beat, dur, root);
+      ev.srcStart = t.pos; ev.srcEnd = dots ? tokens[k - 1].end : tokens[last].end;
+      if (!hadSep && events.length > 0) {
+        const prev = events[events.length - 1];
+        if (prev.type === 'note' && ev.type === 'note' && prev.midi === ev.midi
+            && Math.abs(prev.startBeat + prev.durBeats - beat) < 1e-6) {
+          prev.durBeats += dur;
+          prev.srcEnd = ev.srcEnd;
+          beat += dur;
+          i = k;
+          continue;
+        }
+      }
       events.push(ev);
-      beat += len;
-      i = last + 1; // 让被跳过的小节线回到顶层循环处理(记录其位置)
+      beat += dur;
+      i = k;
     } else {
       i++;
     }
