@@ -176,6 +176,15 @@ function renderStaff(container, voices, opts) {
   const s = svg('svg', { width: W, height: H, class: 'staff' }, scroller);
   const stepY = LINEGAP / 2;
 
+  // 小节线: 按固定拍数, 实线贯穿所有谱表; 先画好垫在底层, 避免挡住之后的音符点击
+  const barTop = TOP, barBot = TOP + (voices.length - 1) * BAND + 4 * LINEGAP;
+  svg('text', { x: LEFT + 2, y: barTop - 4, fill: '#8a90a3', 'font-size': 10, 'font-family': 'sans-serif', 'pointer-events': 'none' }, s).textContent = '1';
+  barPositions(opts, voices, totalBeats).forEach((b, idx) => {
+    const x = LEFT + b * BW;
+    svg('line', { x1: x, y1: barTop, x2: x, y2: barBot, stroke: '#aab0c4', 'stroke-width': 1.6, 'pointer-events': 'none' }, s);
+    svg('text', { x: x + 2, y: barTop - 4, fill: '#8a90a3', 'font-size': 10, 'font-family': 'sans-serif', 'pointer-events': 'none' }, s).textContent = '' + (idx + 2);
+  });
+
   voices.forEach((vc, v) => {
     const notes = vc.model.events.filter((e) => e.type === 'note');
     const med = notes.length ? notes.map((e) => e.midi).sort((a, b) => a - b)[notes.length >> 1] : 67;
@@ -195,14 +204,17 @@ function renderStaff(container, voices, opts) {
     vc.model.events.forEach((ev, i) => {
       const x = LEFT + ev.startBeat * BW + 6;
       if (ev.type === 'rest') {
-        const rt = svg('rect', { x: x + 2, y: bottomLineY - 2 * LINEGAP - 2, width: 9, height: 4, fill: '#6b7180', class: 'srest', 'data-v': v, 'data-i': i }, s);
-        if (ev.srcStart != null) { rt.setAttribute('data-s', ev.srcStart); rt.setAttribute('data-e', ev.srcEnd); }
+        const g = svg('g', { class: 'srest', 'data-v': v, 'data-i': i }, s);
+        if (ev.srcStart != null) { g.setAttribute('data-s', ev.srcStart); g.setAttribute('data-e', ev.srcEnd); }
+        svg('rect', { x: x - 6, y: bottomLineY - 2 * LINEGAP - 9, width: 20, height: 20, fill: 'transparent' }, g);
+        svg('rect', { x: x + 2, y: bottomLineY - 2 * LINEGAP - 2, width: 9, height: 4, fill: '#6b7180' }, g);
         return;
       }
       const d = diatonic(ev.name);
       const y = yDia(d);
       const g = svg('g', { class: 'snote', 'data-v': v, 'data-i': i }, s);
       if (ev.srcStart != null) { g.setAttribute('data-s', ev.srcStart); g.setAttribute('data-e', ev.srcEnd); }
+      svg('rect', { x: x - 8, y: y - 8, width: 16, height: 16, fill: 'transparent' }, g);
       if (d > topDia) for (let dd = topDia + 2; dd <= d; dd += 2) svg('line', { x1: x - 7, y1: yDia(dd), x2: x + 7, y2: yDia(dd), stroke: '#454b5c' }, g);
       if (d < botDia) for (let dd = botDia - 2; dd >= d; dd -= 2) svg('line', { x1: x - 7, y1: yDia(dd), x2: x + 7, y2: yDia(dd), stroke: '#454b5c' }, g);
       const sp = spell(ev.name);
@@ -214,15 +226,6 @@ function renderStaff(container, voices, opts) {
         svg('line', { x1: up ? x + 5 : x - 5, y1: y, x2: up ? x + 5 : x - 5, y2: y + (up ? -1 : 1) * 3 * LINEGAP, stroke: vc.color, 'stroke-width': 1.4 }, g);
       }
     });
-  });
-
-  // 小节线: 按固定拍数, 实线贯穿所有谱表, 画清晰
-  const barTop = TOP, barBot = TOP + (voices.length - 1) * BAND + 4 * LINEGAP;
-  svg('text', { x: LEFT + 2, y: barTop - 4, fill: '#8a90a3', 'font-size': 10, 'font-family': 'sans-serif' }, s).textContent = '1';
-  barPositions(opts, voices, totalBeats).forEach((b, idx) => {
-    const x = LEFT + b * BW;
-    svg('line', { x1: x, y1: barTop, x2: x, y2: barBot, stroke: '#aab0c4', 'stroke-width': 1.6 }, s);
-    svg('text', { x: x + 2, y: barTop - 4, fill: '#8a90a3', 'font-size': 10, 'font-family': 'sans-serif' }, s).textContent = '' + (idx + 2);
   });
 
   const hl = makeHighlight(container);
