@@ -39,11 +39,11 @@ const SHORT_NOTES = {
 
 function keyToRootMidi(letter) {
   // 把调号 (do 落在哪个音) 映射到 4 区附近的 MIDI 音高
-  const m = /^([A-Ga-g])([#b]?)$/.exec(letter || '');
+  const m = /^([A-Ga-g])([#bB]?)$/.exec(letter || '');
   if (!m) return 60; // 默认 C4
   let pc = PITCH_CLASS[m[1].toUpperCase()];
   if (m[2] === '#') pc += 1;
-  if (m[2] === 'b') pc -= 1;
+  else if (m[2].toLowerCase() === 'b') pc -= 1;
   return 60 + ((pc % 12) + 12) % 12;
 }
 
