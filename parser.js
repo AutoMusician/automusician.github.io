@@ -8,6 +8,7 @@
 //           例: [123] = 三连音;  [12345] = 五连音
 //   八度:   前缀 + 高八度, - 低八度, 可叠加 (++1 高两个八度)
 //   升降:   后缀 # 升, b 降 (顺序: 八度在前, 升降在后, 如 +1#)
+//   转调:   (1=Bb) 从此处起切换调号, 影响后续所有音
 //   首行:   可选, 调号+速度, 如 "1=G 120"; 默认 1=C / 72
 
 const MAJOR_STEPS = [0, 2, 4, 5, 7, 9, 11]; // 大调音阶各级的半音偏移
@@ -87,6 +88,21 @@ function tokenize(str, errors, base) {
     if (c === '|') { tokens.push({ kind: 'bar' }); i++; continue; }              // 小节线, 纯装饰
     if (c === '[') { tokens.push({ kind: 'bopen' }); i++; continue; }
     if (c === ']') { tokens.push({ kind: 'bclose' }); i++; continue; }
+    if (c === '(') {
+      const rest = str.slice(i);
+      const km = /^\(\s*(?:([1-7])\s*=\s*([A-Ga-g][#b]?)|key\s*=\s*([A-Ga-g][#b]?))\s*\)/.exec(rest);
+      if (km) {
+        const newKey = (km[2] || km[3]).toUpperCase();
+        tokens.push({ kind: 'keychange', key: newKey, pos: at, end: at + km[0].length });
+        i += km[0].length;
+        continue;
+      }
+      const closeIdx = str.indexOf(')', i + 1);
+      if (closeIdx !== -1) { errors.push(`无法识别的转调标记 "${str.slice(i, closeIdx + 1)}"`); i = closeIdx + 1; }
+      else { errors.push('"(" 没有匹配的 ")"'); i++; }
+      continue;
+    }
+    if (c === ')') { i++; continue; }
     if (c === '.') { tokens.push({ kind: 'dot', pos: at, end: at + 1 }); i++; continue; } // 附点: 时值 ×1.5
     // +/- 是独立的移调记号: 从此处起累积升/降八度, 影响后续所有音
     if (c === '+') { tokens.push({ kind: 'octup' }); i++; continue; }
@@ -166,12 +182,14 @@ function makeEvent(t, startBeat, durBeats, root) {
 }
 
 // 第二步: 把 token 流编译成带拍位的事件序列
-function build(tokens, root, errors) {
+function build(tokens, initialRoot, errors) {
   const events = [];
   const bars = [];
+  let root = initialRoot;
   let beat = 0, i = 0, lastWasSep = false;
   while (i < tokens.length) {
     const t = tokens[i];
+    if (t.kind === 'keychange') { root = keyToRootMidi(t.key); i++; continue; }
     if (t.kind === 'sep') { lastWasSep = true; i++; continue; }
     if (t.kind === 'bar') { bars.push(beat); i++; continue; }
     if (t.kind === 'bclose') { errors.push('多余的 "]"'); i++; continue; }
@@ -253,6 +271,15 @@ function parseMelody(text, opts) {
     const nl = raw.indexOf('\n');                 // 旋律: 首行恒为调号/速度说明, 不判别
     header = parseHeader(nl === -1 ? raw : raw.slice(0, nl), d);
     bodyStart = nl === -1 ? raw.length : nl + 1;
+  } else {
+    // 和声行: 默认跟随旋律调号, 但首行可显式声明自己的调 (如 "1=Bb")
+    const nl = raw.indexOf('\n');
+    const first = nl === -1 ? raw : raw.slice(0, nl);
+    const m = /([1-7])\s*=\s*([A-Ga-g][#b]?)/.exec(first) || /key\s*=\s*()([A-Ga-g][#b]?)/i.exec(first);
+    if (m) {
+      header.key = m[2].toUpperCase();
+      bodyStart = nl === -1 ? raw.length : nl + 1;
+    }
   }
   const root = keyToRootMidi(header.key);
   // 直接对原文本切片做词法分析(换行被当空白跳过), 偏移加 bodyStart -> 映射回 textarea 原位置

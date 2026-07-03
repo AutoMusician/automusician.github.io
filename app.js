@@ -74,7 +74,7 @@ function addRow(text, opts) {
   const ta = document.createElement('textarea'); ta.spellcheck = false; ta.value = text || '';
   ta.placeholder = isMelody
     ? '在此输入旋律 · 例：1=C 72 ↵ 1 1 5 5 6 6 5'
-    : '和声行：可手写，或点上方「自动配和声」生成';
+    : '和声行：可手写，或点上方「自动配和声」生成 · 默认跟随旋律调号，首行写 1=G 可单独定调';
   ta.rows = isMelody ? 3 : (text || '').includes('\n') ? 2 : 1;
   const del = document.createElement('button'); del.className = 'del'; del.textContent = '✕'; del.title = '删除该声部';
   wrap.append(tag, ta, del);
@@ -214,7 +214,7 @@ viz.addEventListener('click', (e) => {
 // 导出/导入
 $('exportBtn').addEventListener('click', () => {
   const state = {
-    rows: rows.map((r) => ({ text: r.textarea.value, label: r.label || null, auto: !!r.auto, vol: +r.volEl.value })),
+    rows: rows.map((r) => ({ text: r.textarea.value, label: r.label || null, auto: !!r.auto, vol: +r.volEl.value, wave: r.waveEl.value })),
     view: viewSel.value, wave: waveSel.value, harmTex: harmTexSel.value,
     barBeats: $('barBeats').value, pickup: $('pickup').value,
   };
