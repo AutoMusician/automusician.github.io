@@ -146,7 +146,7 @@
 </head>
 <body>
   <h1>AutoMusician · 旋律配和声</h1>
-  <p class="hint">记谱：<code>1-7</code> 唱名 · <code>0</code> 休止 · 重复=延长 · <code>.</code> 附点 · <code>'</code> 断开 ·<code>[ ]</code> 占两拍的连音 · <code>+/-</code> 从此处起升/降八度 · 字母=钢琴键(<code>QWRTYIO</code>黑键 · <code>C-G A B</code>低音 · <code>8 9 P</code>高音) · <code>#/b</code> 升降 ·<code>|</code> 小节线(仅装饰) · <code>(1=Bb)</code> 中途转调 · 旋律首行(必填) <code>1=G 120</code></p>
+  <p class="hint">记谱：<code>1-7</code> 唱名 · <code>0</code> 休止 · 重复=延长 · <code>.</code> 附点 · <code>'</code> 断开 ·<code>[ ]</code> 占两拍的连音 · <code>+/-</code> 从此处起升/降八度 · 字母=钢琴键(<code>QWRTYIO</code>黑键 · <code>C-G A B</code>低音 · <code>8 9 P</code>高音) · <code>#/b</code> 升降 ·<code>|</code> 小节线(仅装饰) · <code>(1=C 0=120)</code> 转调/变速(首行或中途, 各声部可不同) · 旋律首行(必填) <code>1=G 120</code></p>
 
   <div id="voices"></div>
 
@@ -221,8 +221,10 @@
       <tr><td><code>1#</code> / <code>3b</code></td><td>升 / 降（小写 b 跟在数字/字母后 = 降；<code>C#</code> <code>Ab</code> 也可）</td></tr>
       <tr><td><code>|</code></td><td>小节线（仅供阅读，不影响播放）</td></tr>
       <tr><td><code>1=G 120</code></td><td><b>旋律首行必填</b>：调号 G、速度 120（也可 <code>bpm=120</code>；音符从第 2 行起）</td></tr>
+      <tr><td><code>(1=C 0=120)</code></td><td>括号声明：调号 <code>1=C</code>、速度 <code>0=120</code>（可只写其一）。放在首行或音符中途皆可，从此处起生效</td></tr>
+      <tr><td>和声独立调/速</td><td>和声行首行写 <code>1=Bb 0=90</code> 或行内 <code>(1=Bb 0=90)</code>，即可与主旋律用不同的调和速度；不写则跟随主旋律</td></tr>
     </table>
-    <p>多声部：<code>＋ 添加和声行</code> 手动加一行，或 <code>✨ 自动配和声</code> 自动生成和声（织体可选）。和声行没有首行说明，整行都是音符。所有声部同时播放。</p>
+    <p>多声部：<code>＋ 添加和声行</code> 手动加一行，或 <code>✨ 自动配和声</code> 自动生成和声（织体可选）。和声行默认跟随主旋律调号/速度，也可用上面的括号声明单独定调/变速。所有声部同时播放。</p>
     <p>快捷键：焦点在输入框外时按 <code>空格</code> 播放 / 停止。</p>
   </details>
 

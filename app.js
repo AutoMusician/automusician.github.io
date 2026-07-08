@@ -135,7 +135,7 @@ function onPlay() {
   if (!playable.length) { status.textContent = '没有可播放的音符'; return; }
   engine.wave = waveSel.value;
   const bpm = parsed[0].model.bpm;
-  const voiceEvents = parsed.map((v, i) => ({ events: v.model.events, gain: (rows[i] ? +rows[i].volEl.value : 100) / 100, wave: rows[i] ? rows[i].waveEl.value : waveSel.value }));
+  const voiceEvents = parsed.map((v, i) => ({ events: v.model.events, tempos: v.model.tempos, gain: (rows[i] ? +rows[i].volEl.value : 100) / 100, wave: rows[i] ? rows[i].waveEl.value : waveSel.value }));
   playBtn.disabled = true; stopBtn.disabled = false;
   const from = playFromBeat;
   engine.play(voiceEvents, bpm,

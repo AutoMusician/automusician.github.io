@@ -1,6 +1,33 @@
 // audio.js —— 基于 Web Audio API 的播放引擎 (零依赖)
 // 默认音色: 方波振荡器 (经典蜂鸣音); 也可换其它波形, 或加载一段采样做简易采样器
 
+// 分段恒速: 把"拍位"换算成"从第 0 拍起的秒数", 支持中途变速。
+//   tempos = [{ beat, bpm }] 按 beat 升序, 第一段 beat 恒为 0。
+function beatToTime(tempos, beat) {
+  let t = 0;
+  for (let i = 0; i < tempos.length; i++) {
+    const seg = tempos[i], next = tempos[i + 1];
+    if (beat <= seg.beat) break;
+    const segEnd = next ? next.beat : Infinity;
+    t += (Math.min(beat, segEnd) - seg.beat) * (60 / seg.bpm);
+    if (beat <= segEnd) break;
+  }
+  return t;
+}
+// 逆映射: 秒数 -> 拍位
+function timeToBeat(tempos, time) {
+  let acc = 0;
+  for (let i = 0; i < tempos.length; i++) {
+    const seg = tempos[i], next = tempos[i + 1];
+    const segEnd = next ? next.beat : Infinity;
+    const spb = 60 / seg.bpm;
+    const segDur = (segEnd - seg.beat) * spb;
+    if (!next || time <= acc + segDur) return seg.beat + (time - acc) / spb;
+    acc += segDur;
+  }
+  return 0;
+}
+
 class AudioEngine {
   constructor() {
     this.ctx = null;
@@ -229,9 +256,10 @@ class AudioEngine {
     this.scheduled.push(noise);
   }
 
-  // voices: [{ events, gain?, wave? }]  多声部同时播放
-  // onTick(activeIdxPerVoice, beat) 高亮回调; onEnd 结束回调
-  // fromBeat: 从第几拍开始播放 (默认 0 = 开头)
+  // voices: [{ events, gain?, wave?, tempos? }]  多声部同时播放
+  //   每个声部有自己的分段恒速表(tempos), 允许不同速度/中途变速; 缺省用全局 bpm。
+  // onTick(activeIdxPerVoice, beat) 高亮回调 (beat 取旋律声部拍位, 供视图滚动); onEnd 结束回调
+  // fromBeat: 从第几拍开始播放 (默认 0 = 开头), 各声部都从各自的该拍位起
   async play(voices, bpm, onTick, onEnd, fromBeat) {
     this.stop();
     const ctx = this.ensure();
@@ -239,40 +267,47 @@ class AudioEngine {
     this.playing = true;
     fromBeat = fromBeat || 0;
 
-    const spb = 60 / bpm;
     const t0 = ctx.currentTime + 0.06;
     let lastEnd = t0;
+    const tmap = (v) => (v && v.tempos && v.tempos.length) ? v.tempos : [{ beat: 0, bpm: bpm || 72 }];
 
     voices.forEach((voice) => {
       const vg = voice.gain == null ? 1 : voice.gain;
       const vw = voice.wave;
+      const tempos = tmap(voice);
+      const fromT = beatToTime(tempos, fromBeat);
       for (const ev of voice.events) {
         if (ev.type !== 'note') continue;
         const evEnd = ev.startBeat + ev.durBeats;
         if (evEnd <= fromBeat) continue;
         const noteStart = Math.max(ev.startBeat, fromBeat);
-        const start = t0 + (noteStart - fromBeat) * spb;
-        const dur = (evEnd - noteStart) * spb;
+        const start = t0 + (beatToTime(tempos, noteStart) - fromT);
+        const dur = beatToTime(tempos, evEnd) - beatToTime(tempos, noteStart);
         this.scheduleNote(ev.midi, start, dur, vg, vw);
         lastEnd = Math.max(lastEnd, start + dur);
       }
     });
 
+    // 每个声部按各自速度把 wall-clock 时间换算成拍位, 独立高亮
+    const melTempos = tmap(voices[0]);
+    const melFromT = beatToTime(melTempos, fromBeat);
     const tick = () => {
       if (!this.playing) return;
       const now = ctx.currentTime;
-      const beat = fromBeat + (now - t0) / spb;
       const active = voices.map((voice) => {
+        const tempos = tmap(voice);
+        const b = timeToBeat(tempos, beatToTime(tempos, fromBeat) + (now - t0));
         for (let k = 0; k < voice.events.length; k++) {
           const e = voice.events[k];
-          if (e.type === 'note' && beat >= e.startBeat && beat < e.startBeat + e.durBeats) return k;
+          if (e.type === 'note' && b >= e.startBeat && b < e.startBeat + e.durBeats) return k;
         }
         return -1;
       });
-      if (onTick) onTick(active, Math.max(0, beat));
+      const melBeat = timeToBeat(melTempos, melFromT + (now - t0));
+      if (onTick) onTick(active, Math.max(0, melBeat));
       if (now >= lastEnd + 0.05) {
         this.playing = false;
-        if (onTick) onTick(voices.map(() => -1), beat);
+        if (onTick) onTick(voices.map(() => -1), melBeat);
         if (onEnd) onEnd();
         return;
       }

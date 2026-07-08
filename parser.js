@@ -52,19 +52,41 @@ function midiToName(midi) {
   return NOTE_NAMES[pc] + (Math.floor(midi / 12) - 1);
 }
 
-// 解析可选的首行说明: "1=G 120" / "key=G bpm=120" / "120"
+// 规范化调号显示: 字母大写 + 升降号小写, 如 "eB" -> "Eb", "f#" -> "F#"
+function normalizeKey(s) {
+  const m = /^([A-Ga-g])([#bB]?)$/.exec(s || '');
+  if (!m) return (s || '').toUpperCase();
+  return m[1].toUpperCase() + (m[2] ? (m[2] === '#' ? '#' : 'b') : '');
+}
+
+// 解析可选的首行说明: "1=G 120" / "(1=G 0=120)" / "key=G bpm=120" / "120"
+//   调号: 1=X 或 key=X;  速度: 0=NNN 或 bpm=NNN 或裸数字; 括号可有可无
 function parseHeader(line, defaults) {
   const d = defaults || {};
   const out = { key: d.key || 'C', bpm: d.bpm || 72, hasHeader: false };
   if (!line) return out;
   let found = false;
   let m;
-  if ((m = /([1-7])\s*=\s*([A-Ga-g][#b]?)/.exec(line))) { out.key = m[2].toUpperCase(); found = true; }
-  if ((m = /key\s*=\s*([A-Ga-g][#b]?)/i.exec(line))) { out.key = m[1].toUpperCase(); found = true; }
-  if ((m = /bpm\s*=\s*(\d+)/i.exec(line))) { out.bpm = +m[1]; found = true; }
+  if ((m = /([1-7])\s*=\s*([A-Ga-g][#b]?)/.exec(line))) { out.key = normalizeKey(m[2]); found = true; }
+  if ((m = /key\s*=\s*([A-Ga-g][#b]?)/i.exec(line))) { out.key = normalizeKey(m[1]); found = true; }
+  if ((m = /(?:^|[\s(])0\s*=\s*(\d+)/.exec(line))) { out.bpm = +m[1]; found = true; }
+  else if ((m = /bpm\s*=\s*(\d+)/i.exec(line))) { out.bpm = +m[1]; found = true; }
   else if ((m = /(?:^|\s)(\d{2,3})(?:\s|$)/.exec(line))) { out.bpm = +m[1]; found = true; }
   out.hasHeader = found;
   return out;
+}
+
+// 一行是否是"纯声明行"(只有 X=Y 声明, 没有音符内容) —— 供和声行判别首行是否为表头。
+// 括号声明 (1=G 0=120) 由词法器就地处理, 这里不算, 所以含括号一律返回 false。
+function isPureHeaderLine(line) {
+  if (!line || /[()]/.test(line)) return false;
+  let had = false;
+  let s = ' ' + line + ' ';
+  s = s.replace(/([1-7])\s*=\s*([A-Ga-g][#b]?)/g, () => { had = true; return ' '; });
+  s = s.replace(/key\s*=\s*([A-Ga-g][#b]?)/gi, () => { had = true; return ' '; });
+  s = s.replace(/(?:^|\s)0\s*=\s*(\d+)/g, () => { had = true; return ' '; });
+  s = s.replace(/bpm\s*=\s*(\d+)/gi, () => { had = true; return ' '; });
+  return had && s.trim() === '';
 }
 
 function noteKey(t) { return t.octaves + '|' + t.digit + '|' + t.accidental; }
@@ -89,17 +111,24 @@ function tokenize(str, errors, base) {
     if (c === '[') { tokens.push({ kind: 'bopen' }); i++; continue; }
     if (c === ']') { tokens.push({ kind: 'bclose' }); i++; continue; }
     if (c === '(') {
-      const rest = str.slice(i);
-      const km = /^\(\s*(?:([1-7])\s*=\s*([A-Ga-g][#b]?)|key\s*=\s*([A-Ga-g][#b]?))\s*\)/.exec(rest);
-      if (km) {
-        const newKey = (km[2] || km[3]).toUpperCase();
-        tokens.push({ kind: 'keychange', key: newKey, pos: at, end: at + km[0].length });
-        i += km[0].length;
+      // 括号声明: (1=G) 转调, (0=120) 变速, (1=G 0=120) 同时; 也支持 key=/bpm=
+      const grp = /^\(([^)]*)\)/.exec(str.slice(i));
+      if (grp) {
+        const inner = grp[1];
+        let key = null, bpm = null, mm;
+        if ((mm = /([1-7])\s*=\s*([A-Ga-g][#b]?)/.exec(inner))) key = normalizeKey(mm[2]);
+        else if ((mm = /key\s*=\s*([A-Ga-g][#b]?)/i.exec(inner))) key = normalizeKey(mm[1]);
+        if ((mm = /(?:^|\s)0\s*=\s*(\d+)/.exec(inner)) || (mm = /bpm\s*=\s*(\d+)/i.exec(inner))) bpm = +mm[1];
+        if (key || bpm) {
+          tokens.push({ kind: 'keychange', key, bpm, pos: at, end: at + grp[0].length });
+          i += grp[0].length;
+          continue;
+        }
+        errors.push(`无法识别的括号标注 "${grp[0]}"`);
+        i += grp[0].length;
         continue;
       }
-      const closeIdx = str.indexOf(')', i + 1);
-      if (closeIdx !== -1) { errors.push(`无法识别的转调标记 "${str.slice(i, closeIdx + 1)}"`); i = closeIdx + 1; }
-      else { errors.push('"(" 没有匹配的 ")"'); i++; }
+      errors.push('"(" 没有匹配的 ")"'); i++;
       continue;
     }
     if (c === ')') { i++; continue; }
@@ -182,14 +211,24 @@ function makeEvent(t, startBeat, durBeats, root) {
 }
 
 // 第二步: 把 token 流编译成带拍位的事件序列
-function build(tokens, initialRoot, errors) {
+// tempos: [{ beat, bpm }] 分段恒速表, 供播放时把"拍"换算成"秒"(支持中途变速)
+function build(tokens, initialRoot, initialBpm, errors) {
   const events = [];
   const bars = [];
+  const tempos = [{ beat: 0, bpm: initialBpm || 72 }];
   let root = initialRoot;
   let beat = 0, i = 0, lastWasSep = false;
   while (i < tokens.length) {
     const t = tokens[i];
-    if (t.kind === 'keychange') { root = keyToRootMidi(t.key); i++; continue; }
+    if (t.kind === 'keychange') {
+      if (t.key) root = keyToRootMidi(t.key);
+      if (t.bpm) {
+        const last = tempos[tempos.length - 1];
+        if (Math.abs(last.beat - beat) < 1e-6) last.bpm = t.bpm; // 同一拍位上的重复声明: 覆盖
+        else tempos.push({ beat, bpm: t.bpm });
+      }
+      i++; continue;
+    }
     if (t.kind === 'sep') { lastWasSep = true; i++; continue; }
     if (t.kind === 'bar') { bars.push(beat); i++; continue; }
     if (t.kind === 'bclose') { errors.push('多余的 "]"'); i++; continue; }
@@ -258,7 +297,7 @@ function build(tokens, initialRoot, errors) {
       i++;
     }
   }
-  return { events, bars, totalBeats: beat };
+  return { events, bars, totalBeats: beat, tempos };
 }
 
 function parseMelody(text, opts) {
@@ -272,20 +311,25 @@ function parseMelody(text, opts) {
     header = parseHeader(nl === -1 ? raw : raw.slice(0, nl), d);
     bodyStart = nl === -1 ? raw.length : nl + 1;
   } else {
-    // 和声行: 默认跟随旋律调号, 但首行可显式声明自己的调 (如 "1=Bb")
+    // 和声行: 默认跟随旋律调号/速度; 首行若是"纯声明行"(如 "1=Bb" / "1=Bb 0=90") 则吃掉当表头。
+    // 括号声明 (1=Bb 0=90) 不在此处理, 交给词法器就地生效(下面的 fold 逻辑会补进表头供显示)。
     const nl = raw.indexOf('\n');
     const first = nl === -1 ? raw : raw.slice(0, nl);
-    const m = /([1-7])\s*=\s*([A-Ga-g][#b]?)/.exec(first) || /key\s*=\s*()([A-Ga-g][#b]?)/i.exec(first);
-    if (m) {
-      header.key = m[2].toUpperCase();
+    if (isPureHeaderLine(first)) {
+      header = parseHeader(first, d);
       bodyStart = nl === -1 ? raw.length : nl + 1;
     }
   }
-  const root = keyToRootMidi(header.key);
   // 直接对原文本切片做词法分析(换行被当空白跳过), 偏移加 bodyStart -> 映射回 textarea 原位置
   const tokens = resolveOctaves(tokenize(raw.slice(bodyStart), errors, bodyStart));
-  const { events, bars, totalBeats } = build(tokens, root, errors);
-  return { key: header.key, bpm: header.bpm, root, events, bars, totalBeats, errors };
+  // 开头(第 0 拍)的括号声明并入表头, 让状态栏能显示实际的调号/速度
+  for (const tk of tokens) {
+    if (tk.kind === 'note' || tk.kind === 'bopen') break;
+    if (tk.kind === 'keychange') { if (tk.key) header.key = tk.key; if (tk.bpm) header.bpm = tk.bpm; }
+  }
+  const root = keyToRootMidi(header.key);
+  const { events, bars, totalBeats, tempos } = build(tokens, root, header.bpm, errors);
+  return { key: header.key, bpm: header.bpm, root, events, bars, totalBeats, tempos, errors };
 }
 
 if (typeof module !== 'undefined') module.exports = { parseMelody, midiToName, keyToRootMidi };
