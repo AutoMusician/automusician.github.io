@@ -311,7 +311,7 @@ clearSampleBtn.addEventListener('click', () => {
 });
 
 // 预热: 首次任意交互就建好音频上下文, 消除冷启动延迟
-function warmup() { const ctx = engine.ensure(); if (ctx.state !== 'running') ctx.resume(); }
+function warmup() { engine.unlock(); }
 window.addEventListener('pointerdown', warmup, { once: true });
 window.addEventListener('keydown', warmup, { once: true });
 

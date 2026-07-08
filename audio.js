@@ -50,6 +50,20 @@ class AudioEngine {
     return this.ctx;
   }
 
+  // Safari/iOS 解锁: 必须在用户手势内"同步"播放一个静音 buffer 并 resume,
+  // 否则 AudioContext 一直是 suspended, 后面排程的音全都无声。
+  // Safari 会在页面切后台/久置后再次挂起, 所以每次交互都重新解锁一次最稳。
+  unlock() {
+    const ctx = this.ensure();
+    try {
+      const b = ctx.createBuffer(1, 1, 22050);
+      const s = ctx.createBufferSource();
+      s.buffer = b; s.connect(ctx.destination); s.start(0);
+    } catch (e) { /* 某些浏览器重复解锁会抛错, 忽略 */ }
+    if (ctx.state !== 'running' && ctx.resume) { try { ctx.resume(); } catch (e) {} }
+    return ctx;
+  }
+
   midiToFreq(m) { return 440 * Math.pow(2, (m - 69) / 12); }
 
   async loadSample(file, baseMidi = 60) {
@@ -62,9 +76,9 @@ class AudioEngine {
   clearSample() { this.sample = null; }
 
   async testBeep() {
-    const ctx = this.ensure();
+    const ctx = this.unlock();               // 同步解锁 (在 click 手势内)
     if (ctx.state !== 'running') { try { await ctx.resume(); } catch (e) {} }
-    this.scheduleNote(69, ctx.currentTime + 0.02, 0.35);
+    this.scheduleNote(69, ctx.currentTime + 0.05, 0.4);
     return ctx.state;
   }
 
@@ -262,7 +276,7 @@ class AudioEngine {
   // fromBeat: 从第几拍开始播放 (默认 0 = 开头), 各声部都从各自的该拍位起
   async play(voices, bpm, onTick, onEnd, fromBeat) {
     this.stop();
-    const ctx = this.ensure();
+    const ctx = this.unlock();               // 同步解锁 (在播放手势内)
     if (ctx.state !== 'running') { try { await ctx.resume(); } catch (e) {} }
     this.playing = true;
     fromBeat = fromBeat || 0;
