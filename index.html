@@ -66,6 +66,11 @@
   .sep { flex: 1; }
   .status { margin: 10px 0 14px; color: var(--muted); font-size: 13px; min-height: 20px; }
   .status.err { color: var(--err); }
+  .shareurl {
+    display: none; width: 100%; margin: -6px 0 14px; padding: 8px 10px;
+    background: var(--panel); color: var(--fg); border: 1px solid var(--accent);
+    border-radius: 8px; font: 12px/1.4 "SF Mono", Menlo, monospace;
+  }
 
   /* 视图容器 */
   #viz {
@@ -163,6 +168,7 @@
     <span class="sep"></span>
     <label class="field">每小节 <input type="number" id="barBeats" value="4" min="0" max="16" /> 拍</label>
     <label class="field">挂拍 <input type="number" id="pickup" value="0" min="0" max="15" /> 拍</label>
+    <button id="shareBtn" class="ghost" title="生成可分享的链接(乐谱直接编码在链接里, 打开即载入)">🔗 分享链接</button>
     <button id="exportBtn" class="ghost" title="导出当前旋律和设置为文件">⬇ 导出</button>
     <button id="importBtn" class="ghost" title="从文件导入旋律和设置">⬆ 导入</button>
     <input type="file" id="importFile" accept=".json" style="display:none" />

@@ -30,18 +30,46 @@ function updatePlayBtn() {
   playBtn.textContent = playFromBeat > 0 ? `▶ 从第${Math.round(playFromBeat * 10) / 10}拍` : '▶ 播放';
 }
 
-/* ---------- 本地存储: 刷新后自动恢复 ---------- */
+/* ---------- 状态快照: 供本地存储 / 导出 / 分享链接共用 ---------- */
 const STORE_KEY = 'automusician.v1';
+function snapshot() {
+  return {
+    rows: rows.map((r) => ({ text: r.textarea.value, label: r.label || null, auto: !!r.auto, vol: +r.volEl.value, wave: r.waveEl.value })),
+    view: viewSel.value, wave: waveSel.value, harmTex: harmTexSel.value, barBeats: $('barBeats').value, pickup: $('pickup').value,
+  };
+}
+// 把一份状态对象套用到界面上 (不触发渲染; 调用方随后自行 renderAll)
+function applyState(saved) {
+  rows.slice().forEach((r) => r.wrap.remove());
+  rows = [];
+  if (saved.rows) saved.rows.forEach((r) => addRow(r.text, { auto: r.auto, label: r.label || undefined, vol: r.vol, wave: r.wave }));
+  if (saved.view) viewSel.value = saved.view;
+  if (saved.wave) { waveSel.value = saved.wave; engine.wave = saved.wave; }
+  if (saved.harmTex) harmTexSel.value = saved.harmTex;
+  if (saved.barBeats) $('barBeats').value = saved.barBeats;
+  if (saved.pickup != null) $('pickup').value = saved.pickup;
+  relabel();
+}
 function saveState() {
-  try {
-    localStorage.setItem(STORE_KEY, JSON.stringify({
-      rows: rows.map((r) => ({ text: r.textarea.value, label: r.label || null, auto: !!r.auto, vol: +r.volEl.value, wave: r.waveEl.value })),
-      view: viewSel.value, wave: waveSel.value, harmTex: harmTexSel.value, barBeats: $('barBeats').value, pickup: $('pickup').value,
-    }));
-  } catch (e) { /* localStorage 不可用时静默忽略 */ }
+  try { localStorage.setItem(STORE_KEY, JSON.stringify(snapshot())); } catch (e) { /* localStorage 不可用时静默忽略 */ }
 }
 function loadState() {
   try { return JSON.parse(localStorage.getItem(STORE_KEY) || 'null'); } catch (e) { return null; }
+}
+
+// UTF-8 安全的 base64url 编解码 —— 把乐谱状态塞进 URL(#m=...), 无需后端存储即可分享
+function b64urlEncode(str) {
+  const bytes = new TextEncoder().encode(str);
+  let bin = '';
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function b64urlDecode(s) {
+  s = s.replace(/-/g, '+').replace(/_/g, '/');
+  const bin = atob(s);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new TextDecoder().decode(bytes);
 }
 
 /* ---------- 声部编辑行 ---------- */
@@ -213,12 +241,7 @@ viz.addEventListener('click', (e) => {
 
 // 导出/导入
 $('exportBtn').addEventListener('click', () => {
-  const state = {
-    rows: rows.map((r) => ({ text: r.textarea.value, label: r.label || null, auto: !!r.auto, vol: +r.volEl.value, wave: r.waveEl.value })),
-    view: viewSel.value, wave: waveSel.value, harmTex: harmTexSel.value,
-    barBeats: $('barBeats').value, pickup: $('pickup').value,
-  };
-  const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
+  const blob = new Blob([JSON.stringify(snapshot(), null, 2)], { type: 'application/json' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = 'automusician-' + new Date().toISOString().slice(0, 10) + '.json';
@@ -232,16 +255,8 @@ $('importFile').addEventListener('change', () => {
   const reader = new FileReader();
   reader.onload = () => {
     try {
-      const saved = JSON.parse(reader.result);
-      rows.slice().forEach((r) => r.wrap.remove());
-      rows = [];
-      if (saved.rows) saved.rows.forEach((r) => addRow(r.text, { auto: r.auto, label: r.label, vol: r.vol, wave: r.wave }));
-      if (saved.view) viewSel.value = saved.view;
-      if (saved.wave) { waveSel.value = saved.wave; engine.wave = saved.wave; }
-      if (saved.harmTex) harmTexSel.value = saved.harmTex;
-      if (saved.barBeats) $('barBeats').value = saved.barBeats;
-      if (saved.pickup != null) $('pickup').value = saved.pickup;
-      relabel(); renderAll();
+      applyState(JSON.parse(reader.result));
+      renderAll();
       status.className = 'status';
       status.textContent = '已导入: ' + f.name;
     } catch (e) {
@@ -251,6 +266,33 @@ $('importFile').addEventListener('change', () => {
   };
   reader.readAsText(f);
   $('importFile').value = '';
+});
+
+// 分享: 把整份乐谱编码进 URL(#m=...), 复制到剪贴板 —— 纯静态站, 无需服务器存储
+$('shareBtn').addEventListener('click', async () => {
+  let url;
+  try {
+    const payload = b64urlEncode(JSON.stringify(snapshot()));
+    url = location.origin + location.pathname + '#m=' + payload;
+  } catch (e) {
+    status.className = 'status err';
+    status.textContent = '生成分享链接失败: ' + e.message;
+    return;
+  }
+  let copied = false;
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) { await navigator.clipboard.writeText(url); copied = true; }
+  } catch (e) { /* 剪贴板不可用 (非 HTTPS 等), 走下面的手动复制 */ }
+  status.className = 'status';
+  if (copied) {
+    status.textContent = `🔗 分享链接已复制到剪贴板 (共 ${url.length} 字符) · 打开即可载入这份乐谱`;
+  } else {
+    // 剪贴板失败: 选中一个只读输入框里的链接, 让用户手动复制
+    let box = $('shareUrl');
+    if (!box) { box = document.createElement('input'); box.id = 'shareUrl'; box.readOnly = true; box.className = 'shareurl'; status.after(box); }
+    box.value = url; box.style.display = 'block'; box.focus(); box.select();
+    status.textContent = '🔗 分享链接 (下方已选中, 按 ⌘/Ctrl+C 复制):';
+  }
 });
 
 // 重置: 清空本地存档, 恢复默认示例与默认设置
@@ -322,8 +364,17 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
-// 初始: 有本地存档则恢复, 否则用默认示例
-const saved = loadState();
+// 初始: 分享链接(#m=...) > 本地存档 > 默认示例
+function stateFromHash() {
+  const m = /[#&]m=([^&]+)/.exec(location.hash || '');
+  if (!m) return null;
+  try {
+    const s = JSON.parse(b64urlDecode(m[1]));
+    return (s && Array.isArray(s.rows) && s.rows.length) ? s : null;
+  } catch (e) { return null; }
+}
+const shared = stateFromHash();
+const saved = shared || loadState();
 if (saved && Array.isArray(saved.rows) && saved.rows.length) {
   saved.rows.forEach((r) => addRow(r.text, { auto: r.auto, label: r.label || undefined, vol: r.vol, wave: r.wave }));
   if (saved.view) viewSel.value = saved.view;
@@ -334,4 +385,6 @@ if (saved && Array.isArray(saved.rows) && saved.rows.length) {
 } else {
   addRow(MELODY_DEMO);
 }
+// 载入分享链接后清掉 hash: 之后就是普通可编辑会话(改动进 localStorage), 刷新不会回退
+if (shared) { try { saveState(); history.replaceState(null, '', location.pathname + location.search); } catch (e) {} }
 renderAll();
