@@ -94,6 +94,7 @@ class AudioEngine {
     if (w === 'guitar') return this.scheduleGuitar(midi, start, dur, peak);
     if (w === 'flute') return this.scheduleFlute(midi, start, dur, peak);
     if (w === 'chime') return this.scheduleChime(midi, start, dur, peak);
+    if (w === 'glock') return this.scheduleGlock(midi, start, dur, peak);
     if (w === 'ethereal') return this.scheduleEthereal(midi, start, dur, peak);
     return this.scheduleOsc(midi, start, dur, peak, w);
   }
@@ -272,33 +273,63 @@ class AudioEngine {
     this.scheduled.push(noise);
   }
 
-  // 三角铁 "叮咚": 敲击式快起音 + 一串很高的非谐(金属)泛音 + 长长的余韵 + 起音的一下噪声撞击
+  // 编钟: 青铜钟的敲击 —— 低"嗡"音 + 一串非谐(金属)泛音 + 很长的余韵, "咚——"的钟声
   scheduleChime(midi, start, dur, peak) {
     const ctx = this.ctx;
     const f = this.midiToFreq(midi);
-    const ring = Math.min(2.8, dur + 1.4);          // 余韵: 敲一下能响很久
+    const ring = Math.min(3.2, dur + 1.8);          // 钟声余韵很长
     const g = ctx.createGain();
     const p = peak * 0.5;
     g.gain.setValueAtTime(0, start);
-    g.gain.linearRampToValueAtTime(p, start + 0.004);                                   // 极快起音
+    g.gain.linearRampToValueAtTime(p, start + 0.005);                                   // 敲击起音
     g.gain.exponentialRampToValueAtTime(Math.max(0.0004, p * 0.02), start + ring);      // 长指数衰减
     g.connect(this.master);
-    // 非谐泛音比 (金属/三角铁特有的"叮"色彩), 越高越弱
-    for (const [r, amt] of [[1, 1], [2.76, 0.55], [5.18, 0.34], [8.16, 0.22], [11.9, 0.13]]) {
+    // 0.5 为低"嗡"音(青铜钟体的余响), 其余为非谐金属泛音
+    for (const [r, amt] of [[0.5, 0.22], [1, 1], [2.76, 0.5], [5.18, 0.28], [8.16, 0.15]]) {
       const o = ctx.createOscillator(); o.type = 'sine'; o.frequency.value = f * r;
       const pg = ctx.createGain(); pg.gain.value = amt;
       o.connect(pg); pg.connect(g);
       o.start(start); o.stop(start + ring + 0.1);
       this.scheduled.push(o);
     }
-    // 起音的一下高频噪声撞击 (敲击感)
+    // 起音的一下噪声撞击 (较柔, 是"咚"不是"叮")
     const noise = ctx.createBufferSource(); noise.buffer = this.getNoiseBuffer();
-    const hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = Math.min(9000, f * 3);
+    const hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = Math.min(6000, f * 2.5);
     const ng = ctx.createGain();
-    ng.gain.setValueAtTime(p * 0.5, start);
-    ng.gain.exponentialRampToValueAtTime(0.0002, start + 0.05);
+    ng.gain.setValueAtTime(p * 0.35, start);
+    ng.gain.exponentialRampToValueAtTime(0.0002, start + 0.06);
     noise.connect(hp); hp.connect(ng); ng.connect(this.master);
-    noise.start(start); noise.stop(start + 0.08);
+    noise.start(start); noise.stop(start + 0.09);
+    this.scheduled.push(noise);
+  }
+
+  // 钟琴(glockenspiel): 敲击金属条 —— 音高干净明亮、"叮"一声、余韵短而清脆
+  scheduleGlock(midi, start, dur, peak) {
+    const ctx = this.ctx;
+    const f = this.midiToFreq(midi);
+    const ring = Math.min(1.6, dur + 0.8);          // 干净短促的余韵
+    const g = ctx.createGain();
+    const p = peak * 0.5;
+    g.gain.setValueAtTime(0, start);
+    g.gain.linearRampToValueAtTime(p, start + 0.002);                                   // 干脆敲击
+    g.gain.exponentialRampToValueAtTime(Math.max(0.0004, p * 0.02), start + ring);
+    g.connect(this.master);
+    // 接近谐音(八度为主) -> 音高干净; 顶部一点非谐给金属清脆感
+    for (const [r, amt] of [[1, 1], [2, 0.5], [4, 0.16], [5.4, 0.08]]) {
+      const o = ctx.createOscillator(); o.type = 'sine'; o.frequency.value = f * r;
+      const pg = ctx.createGain(); pg.gain.value = amt;
+      o.connect(pg); pg.connect(g);
+      o.start(start); o.stop(start + ring + 0.05);
+      this.scheduled.push(o);
+    }
+    // 极短高频撞击 = 清脆的"叮"
+    const noise = ctx.createBufferSource(); noise.buffer = this.getNoiseBuffer();
+    const hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = Math.min(12000, f * 6);
+    const ng = ctx.createGain();
+    ng.gain.setValueAtTime(p * 0.4, start);
+    ng.gain.exponentialRampToValueAtTime(0.0002, start + 0.02);
+    noise.connect(hp); hp.connect(ng); ng.connect(this.master);
+    noise.start(start); noise.stop(start + 0.035);
     this.scheduled.push(noise);
   }
 
