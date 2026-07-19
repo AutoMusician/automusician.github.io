@@ -151,7 +151,7 @@
 </head>
 <body>
   <h1>AutoMusician · 旋律配和声</h1>
-  <p class="hint">记谱：<code>1-7</code> 唱名 · <code>0</code> 休止 · 重复=延长 · <code>.</code> 附点 · <code>'</code> 断开 ·<code>[ ]</code> 占两拍的连音 · <code>+/-</code> 从此处起升/降八度 · 字母=钢琴键(<code>QWRTYIO</code>黑键 · <code>C-G A B</code>低音 · <code>8 9 P</code>高音) · <code>#/b</code> 升降 ·<code>|</code> 小节线(仅装饰) · <code>(1=C 0=120)</code> 转调/变速(首行或中途, 各声部可不同) · 旋律首行(必填) <code>1=G 120</code></p>
+  <p class="hint">记谱：<code>1-7</code> 唱名 · <code>0</code> 休止 · 重复=延长 · <code>.</code> 附点(本音×1.5且下一音减半) · <code>'</code> 断开 ·<code>[ ]</code> 占两拍的连音 · <code>+/-</code> 从此处起升/降八度 · 字母=钢琴键(<code>QWRTYIO</code>黑键 · <code>C-G A B</code>低音 · <code>8 9 P</code>高音) · <code>#/b</code> 升降 ·<code>|</code> 小节线(仅装饰) · <code>(1=C 0=120)</code> 转调/变速(首行或中途, 各声部可不同) · 旋律首行(必填) <code>1=G 120</code></p>
 
   <div id="voices"></div>
 
@@ -215,7 +215,7 @@
       <tr><td><code>1 2 3 4 5 6 7</code></td><td>do re mi fa sol la si（相对调号）</td></tr>
       <tr><td><code>0</code></td><td>休止符</td></tr>
       <tr><td><code>111</code></td><td>do 持续 3 拍（紧贴重复 = 延长）</td></tr>
-      <tr><td><code>1.</code> / <code>1..</code></td><td>附点：时值 ×1.5 / ×1.75（<code>1.</code>=1.5 拍，<code>11.</code>=3 拍）</td></tr>
+      <tr><td><code>1.</code> / <code>1..</code></td><td>附点：本音时值 ×1.5 / ×1.75，<b>且紧跟其后的音符时值减半</b>（附点节奏，如 <code>5. 6</code>=1.5+0.5 拍；<code>11.</code>=3 拍）</td></tr>
       <tr><td><code>1'1</code></td><td>两个各 1 拍的 do（<code>'</code> 断开 / 重新触发）</td></tr>
       <tr><td><code>12</code></td><td>不同音天然分开，无需分隔符</td></tr>
       <tr><td>空格</td><td>仅作排版，被忽略（<code>1 1</code> 等同 <code>11</code>）</td></tr>

@@ -175,9 +175,10 @@ function resolveOctaves(tokens) {
 function dotFactor(dots) { return 2 - Math.pow(0.5, dots); }
 
 // 把一段 note/sep token 按"相邻相同记号"合并, 并吞掉后随的附点; 返回每组的时值权重
+// 附点规则: 附点音符本身 ×1.5(每多一点 ×2-0.5^n), 且紧跟其后的那个音符时值减半(附点节奏)
 function mergeRuns(list) {
   const out = [];
-  let k = 0;
+  let k = 0, halveNext = false;
   while (k < list.length) {
     if (list[k].kind !== 'note') { k++; continue; }
     const t = list[k];
@@ -189,7 +190,10 @@ function mergeRuns(list) {
     }
     let dots = 0, m = last + 1;
     while (m < list.length && list[m].kind === 'dot') { dots++; m++; }
-    out.push({ tok: t, weight: len * dotFactor(dots), srcStart: t.pos, srcEnd: dots ? list[m - 1].end : list[last].end });
+    let weight = len * dotFactor(dots);
+    if (halveNext) weight /= 2;   // 紧跟附点音符之后: 时值减半
+    halveNext = dots > 0;         // 本音符有附点 -> 让下一个减半
+    out.push({ tok: t, weight, srcStart: t.pos, srcEnd: dots ? list[m - 1].end : list[last].end });
     k = m;
   }
   return out;
@@ -217,7 +221,7 @@ function build(tokens, initialRoot, initialBpm, errors) {
   const bars = [];
   const tempos = [{ beat: 0, bpm: initialBpm || 72 }];
   let root = initialRoot;
-  let beat = 0, i = 0, lastWasSep = false;
+  let beat = 0, i = 0, lastWasSep = false, halveNext = false;
   while (i < tokens.length) {
     const t = tokens[i];
     if (t.kind === 'keychange') {
@@ -235,6 +239,7 @@ function build(tokens, initialRoot, initialBpm, errors) {
     if (t.kind === 'bopen') {
       const sepBefore = lastWasSep;
       lastWasSep = false;
+      halveNext = false;   // 连音括号自成一体, 打断附点减半链
       const inner = [];
       i++;
       while (i < tokens.length && tokens[i].kind !== 'bclose') { inner.push(tokens[i]); i++; }
@@ -276,7 +281,9 @@ function build(tokens, initialRoot, initialBpm, errors) {
       }
       let dots = 0, k = last + 1;
       while (k < tokens.length && tokens[k].kind === 'dot') { dots++; k++; }
-      const dur = len * dotFactor(dots);
+      let dur = len * dotFactor(dots);
+      if (halveNext) dur /= 2;   // 紧跟附点音符之后: 时值减半(附点节奏)
+      halveNext = dots > 0;      // 本音符有附点 -> 让下一个减半
       const ev = makeEvent(t, beat, dur, root);
       ev.srcStart = t.pos; ev.srcEnd = dots ? tokens[k - 1].end : tokens[last].end;
       if (!hadSep && events.length > 0) {
