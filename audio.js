@@ -93,6 +93,8 @@ class AudioEngine {
     if (w === 'horn') return this.scheduleHorn(midi, start, dur, peak);
     if (w === 'guitar') return this.scheduleGuitar(midi, start, dur, peak);
     if (w === 'flute') return this.scheduleFlute(midi, start, dur, peak);
+    if (w === 'chime') return this.scheduleChime(midi, start, dur, peak);
+    if (w === 'ethereal') return this.scheduleEthereal(midi, start, dur, peak);
     return this.scheduleOsc(midi, start, dur, peak, w);
   }
 
@@ -268,6 +270,65 @@ class AudioEngine {
     noise.connect(ng); ng.connect(nlp); nlp.connect(g);
     noise.start(start); noise.stop(start + dur + 0.1);
     this.scheduled.push(noise);
+  }
+
+  // 三角铁 "叮咚": 敲击式快起音 + 一串很高的非谐(金属)泛音 + 长长的余韵 + 起音的一下噪声撞击
+  scheduleChime(midi, start, dur, peak) {
+    const ctx = this.ctx;
+    const f = this.midiToFreq(midi);
+    const ring = Math.min(2.8, dur + 1.4);          // 余韵: 敲一下能响很久
+    const g = ctx.createGain();
+    const p = peak * 0.5;
+    g.gain.setValueAtTime(0, start);
+    g.gain.linearRampToValueAtTime(p, start + 0.004);                                   // 极快起音
+    g.gain.exponentialRampToValueAtTime(Math.max(0.0004, p * 0.02), start + ring);      // 长指数衰减
+    g.connect(this.master);
+    // 非谐泛音比 (金属/三角铁特有的"叮"色彩), 越高越弱
+    for (const [r, amt] of [[1, 1], [2.76, 0.55], [5.18, 0.34], [8.16, 0.22], [11.9, 0.13]]) {
+      const o = ctx.createOscillator(); o.type = 'sine'; o.frequency.value = f * r;
+      const pg = ctx.createGain(); pg.gain.value = amt;
+      o.connect(pg); pg.connect(g);
+      o.start(start); o.stop(start + ring + 0.1);
+      this.scheduled.push(o);
+    }
+    // 起音的一下高频噪声撞击 (敲击感)
+    const noise = ctx.createBufferSource(); noise.buffer = this.getNoiseBuffer();
+    const hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = Math.min(9000, f * 3);
+    const ng = ctx.createGain();
+    ng.gain.setValueAtTime(p * 0.5, start);
+    ng.gain.exponentialRampToValueAtTime(0.0002, start + 0.05);
+    noise.connect(hp); hp.connect(ng); ng.connect(this.master);
+    noise.start(start); noise.stop(start + 0.08);
+    this.scheduled.push(noise);
+  }
+
+  // 空灵 pad: 慢起慢收 + 微失谐叠层(宽) + 高八度/两高八度微光 + 缓慢颤动 —— 流行/史诗那种空旷感
+  scheduleEthereal(midi, start, dur, peak) {
+    const ctx = this.ctx;
+    const f = this.midiToFreq(midi);
+    const g = ctx.createGain();
+    const p = peak * 0.4;
+    const a = Math.min(0.35, dur * 0.5), r = Math.min(0.6, dur * 0.5);
+    g.gain.setValueAtTime(0, start);
+    g.gain.linearRampToValueAtTime(p, start + a);                  // 慢起音
+    g.gain.setValueAtTime(p, start + Math.max(a, dur - r));
+    g.gain.linearRampToValueAtTime(0, start + dur + 0.35);         // 尾韵飘散
+    const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = Math.min(5200, f * 6); lp.Q.value = 0.3;
+    lp.connect(g); g.connect(this.master);
+    // [倍频, 失谐(音分), 波形, 幅度] —— 微失谐叠层做出宽度, 高倍频做出微光
+    for (const [mult, det, type, amt] of [[1, 0, 'triangle', 0.55], [1, 7, 'sine', 0.3], [1, -7, 'sine', 0.3], [2, 3, 'sine', 0.2], [4, 0, 'sine', 0.07]]) {
+      const o = ctx.createOscillator(); o.type = type; o.frequency.value = f * mult; o.detune.value = det;
+      const pg = ctx.createGain(); pg.gain.value = amt;
+      o.connect(pg); pg.connect(lp);
+      o.start(start); o.stop(start + dur + 0.4);
+      this.scheduled.push(o);
+    }
+    // 缓慢颤动(呼吸感)
+    const lfo = ctx.createOscillator(); lfo.type = 'sine'; lfo.frequency.value = 0.2;
+    const lg = ctx.createGain(); lg.gain.value = p * 0.14;
+    lfo.connect(lg); lg.connect(g.gain);
+    lfo.start(start); lfo.stop(start + dur + 0.4);
+    this.scheduled.push(lfo);
   }
 
   // voices: [{ events, gain?, wave?, tempos? }]  多声部同时播放

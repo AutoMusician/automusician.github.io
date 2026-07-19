@@ -128,7 +128,7 @@ function addRow(text, opts) {
   const tag = document.createElement('div'); tag.className = 'vtag';
   const nameEl = document.createElement('span'); nameEl.className = 'vname';
   const waveEl = document.createElement('select'); waveEl.className = 'vwave'; waveEl.title = '音色';
-  waveEl.innerHTML = '<option value="piano">钢琴</option><option value="violin">提琴</option><option value="horn">圆号</option><option value="guitar">吉他</option><option value="flute">长笛</option><option value="square">方波</option><option value="triangle">三角</option><option value="sawtooth">锯齿</option><option value="sine">正弦</option>';
+  waveEl.innerHTML = '<option value="piano">钢琴</option><option value="violin">提琴</option><option value="horn">圆号</option><option value="guitar">吉他</option><option value="flute">长笛</option><option value="chime">三角铁</option><option value="ethereal">空灵</option><option value="square">方波</option><option value="triangle">三角波</option><option value="sawtooth">锯齿</option><option value="sine">正弦</option>';
   waveEl.value = (opts && opts.wave) || waveSel.value;
   const volEl = document.createElement('input');
   volEl.type = 'range'; volEl.className = 'vvol'; volEl.min = 0; volEl.max = 100; volEl.title = '音量';
