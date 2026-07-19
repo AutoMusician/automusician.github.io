@@ -57,19 +57,54 @@ function loadState() {
   try { return JSON.parse(localStorage.getItem(STORE_KEY) || 'null'); } catch (e) { return null; }
 }
 
-// UTF-8 安全的 base64url 编解码 —— 把乐谱状态塞进 URL(#m=...), 无需后端存储即可分享
-function b64urlEncode(str) {
-  const bytes = new TextEncoder().encode(str);
+// base64url —— 把乐谱状态塞进 URL, 无需后端存储即可分享
+function bytesToB64url(bytes) {
   let bin = '';
   for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
   return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
-function b64urlDecode(s) {
+function b64urlToBytes(s) {
   s = s.replace(/-/g, '+').replace(/_/g, '/');
   const bin = atob(s);
   const bytes = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  return new TextDecoder().decode(bytes);
+  return bytes;
+}
+function b64urlEncode(str) { return bytesToB64url(new TextEncoder().encode(str)); }         // 未压缩(#m=) 兼容旧链接
+function b64urlDecode(s) { return new TextDecoder().decode(b64urlToBytes(s)); }
+
+// DEFLATE 压缩(浏览器内置 CompressionStream) —— 乐谱文本重复度高, 压缩后链接可短一半以上。
+// 不支持的老浏览器回退到未压缩。用不同的 hash 键区分: #c= 压缩, #m= 未压缩。
+const HAS_DEFLATE = typeof CompressionStream !== 'undefined' && typeof DecompressionStream !== 'undefined';
+async function deflate(str) {
+  const cs = new CompressionStream('deflate-raw');
+  const w = cs.writable.getWriter();
+  w.write(new TextEncoder().encode(str)); w.close();
+  return new Uint8Array(await new Response(cs.readable).arrayBuffer());
+}
+async function inflate(bytes) {
+  const ds = new DecompressionStream('deflate-raw');
+  const w = ds.writable.getWriter();
+  w.write(bytes); w.close();
+  return new TextDecoder().decode(await new Response(ds.readable).arrayBuffer());
+}
+// 生成分享链接(压缩优先); 返回完整 URL
+async function buildShareUrl() {
+  const base = location.origin + location.pathname;
+  const json = JSON.stringify(snapshot());
+  if (HAS_DEFLATE) {
+    try { return base + '#c=' + bytesToB64url(await deflate(json)); } catch (e) { /* 回退 */ }
+  }
+  return base + '#m=' + b64urlEncode(json);
+}
+// 从 URL hash 还原状态(兼容 #c= 压缩 与 #m= 未压缩)
+async function stateFromHash() {
+  const h = location.hash || '';
+  let m = /[#&]c=([^&]+)/.exec(h);
+  if (m && HAS_DEFLATE) { try { return JSON.parse(await inflate(b64urlToBytes(m[1]))); } catch (e) { return null; } }
+  m = /[#&]m=([^&]+)/.exec(h);
+  if (m) { try { return JSON.parse(b64urlDecode(m[1])); } catch (e) { return null; } }
+  return null;
 }
 
 /* ---------- 声部编辑行 ---------- */
@@ -248,6 +283,21 @@ $('exportBtn').addEventListener('click', () => {
   a.click();
   URL.revokeObjectURL(a.href);
 });
+// 导出 MusicXML (MuseScore / Sibelius / Finale 可打开)
+$('mxlBtn').addEventListener('click', () => {
+  const { voices } = collectVoices();
+  const playable = voices.filter((v) => v.model.events.some((e) => e.type === 'note'));
+  if (!playable.length) { status.className = 'status err'; status.textContent = '没有可导出的音符'; return; }
+  const xml = melodyToMusicXML(voices, { barBeats: +$('barBeats').value || 0, pickup: +$('pickup').value || 0, bpm: voices[0].model.bpm });
+  const blob = new Blob([xml], { type: 'application/vnd.recordare.musicxml+xml' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'automusician-' + new Date().toISOString().slice(0, 10) + '.musicxml';
+  a.click();
+  URL.revokeObjectURL(a.href);
+  status.className = 'status';
+  status.textContent = '🎼 已导出 MusicXML · 用 MuseScore 等软件打开即可';
+});
 $('importBtn').addEventListener('click', () => $('importFile').click());
 $('importFile').addEventListener('change', () => {
   const f = $('importFile').files[0];
@@ -268,12 +318,11 @@ $('importFile').addEventListener('change', () => {
   $('importFile').value = '';
 });
 
-// 分享: 把整份乐谱编码进 URL(#m=...), 复制到剪贴板 —— 纯静态站, 无需服务器存储
+// 分享: 把整份乐谱压缩编码进 URL(#c=/#m=), 复制到剪贴板 —— 纯静态站, 无需服务器存储
 $('shareBtn').addEventListener('click', async () => {
   let url;
   try {
-    const payload = b64urlEncode(JSON.stringify(snapshot()));
-    url = location.origin + location.pathname + '#m=' + payload;
+    url = await buildShareUrl();
   } catch (e) {
     status.className = 'status err';
     status.textContent = '生成分享链接失败: ' + e.message;
@@ -364,27 +413,22 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
-// 初始: 分享链接(#m=...) > 本地存档 > 默认示例
-function stateFromHash() {
-  const m = /[#&]m=([^&]+)/.exec(location.hash || '');
-  if (!m) return null;
-  try {
-    const s = JSON.parse(b64urlDecode(m[1]));
-    return (s && Array.isArray(s.rows) && s.rows.length) ? s : null;
-  } catch (e) { return null; }
-}
-const shared = stateFromHash();
-const saved = shared || loadState();
-if (saved && Array.isArray(saved.rows) && saved.rows.length) {
-  saved.rows.forEach((r) => addRow(r.text, { auto: r.auto, label: r.label || undefined, vol: r.vol, wave: r.wave }));
-  if (saved.view) viewSel.value = saved.view;
-  if (saved.wave) { waveSel.value = saved.wave; engine.wave = saved.wave; }
-  if (saved.harmTex) harmTexSel.value = saved.harmTex;
-  if (saved.barBeats) $('barBeats').value = saved.barBeats;
-  if (saved.pickup != null) $('pickup').value = saved.pickup;
-} else {
-  addRow(MELODY_DEMO);
-}
-// 载入分享链接后清掉 hash: 之后就是普通可编辑会话(改动进 localStorage), 刷新不会回退
-if (shared) { try { saveState(); history.replaceState(null, '', location.pathname + location.search); } catch (e) {} }
-renderAll();
+// 初始: 分享链接(#c=/#m=) > 本地存档 > 默认示例。压缩解码是异步的, 故用 async IIFE。
+(async () => {
+  let shared = await stateFromHash();
+  if (!(shared && Array.isArray(shared.rows) && shared.rows.length)) shared = null;
+  const saved = shared || loadState();
+  if (saved && Array.isArray(saved.rows) && saved.rows.length) {
+    saved.rows.forEach((r) => addRow(r.text, { auto: r.auto, label: r.label || undefined, vol: r.vol, wave: r.wave }));
+    if (saved.view) viewSel.value = saved.view;
+    if (saved.wave) { waveSel.value = saved.wave; engine.wave = saved.wave; }
+    if (saved.harmTex) harmTexSel.value = saved.harmTex;
+    if (saved.barBeats) $('barBeats').value = saved.barBeats;
+    if (saved.pickup != null) $('pickup').value = saved.pickup;
+  } else {
+    addRow(MELODY_DEMO);
+  }
+  // 载入分享链接后清掉 hash: 之后就是普通可编辑会话(改动进 localStorage), 刷新不会回退
+  if (shared) { try { saveState(); history.replaceState(null, '', location.pathname + location.search); } catch (e) {} }
+  renderAll();
+})();
