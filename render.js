@@ -34,6 +34,47 @@ function barPositions(opts, voices, totalBeats) {
   return out;
 }
 
+// 分段恒速: 拍位 -> 从第 0 拍起的秒数 (与 audio.js 同款, 支持中途变速)
+function beatToTime(tempos, beat) {
+  let t = 0;
+  for (let i = 0; i < tempos.length; i++) {
+    const seg = tempos[i], next = tempos[i + 1];
+    if (beat <= seg.beat) break;
+    const segEnd = next ? next.beat : Infinity;
+    t += (Math.min(beat, segEnd) - seg.beat) * (60 / seg.bpm);
+    if (beat <= segEnd) break;
+  }
+  return t;
+}
+
+// 把各声部按"时间"重排: 用每个声部自己的速度表把拍位换算成"展示拍"(= 秒 × 参考速度/60)。
+//   参考速度取旋律起始速度, 这样旋律以正常宽度显示, 变慢的声部/段落自动变宽 -> 看到的=听到的。
+//   所有声部共用同一时间轴, 同一时刻在同一 x, 竖直对齐即同时发声。
+//   全曲同速时 displayBeat === beat, 布局与旧版完全一致(零回归)。
+function displayTransform(voices) {
+  const refBpm = (voices[0] && voices[0].model.tempos && voices[0].model.tempos[0] && voices[0].model.tempos[0].bpm) || 72;
+  const dbOf = (tempos) => {
+    const T = (tempos && tempos.length) ? tempos : [{ beat: 0, bpm: refBpm }];
+    return (beat) => beatToTime(T, beat) * refBpm / 60;
+  };
+  const melDb = dbOf(voices[0] && voices[0].model.tempos);
+  const out = voices.map((v) => {
+    const db = dbOf(v.model.tempos);
+    const m = v.model;
+    return Object.assign({}, v, {
+      model: Object.assign({}, m, {
+        events: m.events.map((e) => {
+          const s = db(e.startBeat), en = db(e.startBeat + e.durBeats);
+          return Object.assign({}, e, { startBeat: s, durBeats: en - s, durRaw: e.durBeats });
+        }),
+        bars: (m.bars || []).map(db),
+        totalBeats: db(m.totalBeats),
+      }),
+    });
+  });
+  return { voices: out, melDb };
+}
+
 // 高亮器: 按 data-v / data-i 切换 .active
 function makeHighlight(root) {
   let prev = [];
@@ -60,9 +101,10 @@ function diatonic(name) {
 
 /* ---------- 视图 1: 色块 (连续平滑滚动) ---------- */
 function renderBlocks(container, voices, opts) {
-  const UNIT = 32; // px/拍: 固定单位宽度 -> 同时值同宽、跨声部按时间对齐
+  const UNIT = 32; // px/展示拍: 固定单位宽度 -> 按时间对齐(变慢的音符更宽)
   const totalBeats = Math.max(0, ...voices.map((v) => v.model.totalBeats));
-  const bars = barPositions(opts, voices, totalBeats);
+  const bars = opts._bars || [];
+  const melDb = opts._melDb || ((b) => b);
   const scroller = hdiv('scroller', container);
   const ruler = hdiv('voicerow barruler', scroller);
   hdiv('vlabel', ruler);
@@ -82,7 +124,7 @@ function renderBlocks(container, voices, opts) {
       b.style.background = ev.type === 'rest' ? 'var(--rest)' : voice.color;
       b.setAttribute('data-v', v); b.setAttribute('data-i', i);
       if (ev.srcStart != null) { b.setAttribute('data-s', ev.srcStart); b.setAttribute('data-e', ev.srcEnd); }
-      b.title = ev.type === 'rest' ? `休止符 · ${ev.durBeats} 拍` : `${ev.raw} (${ev.name}) · ${ev.durBeats} 拍`;
+      b.title = ev.type === 'rest' ? `休止符 · ${ev.durRaw} 拍` : `${ev.raw} (${ev.name}) · ${ev.durRaw} 拍`;
       b.innerHTML = ev.type === 'rest'
         ? '<span class="lab">𝄽</span>'
         : `<span class="lab">${ev.raw}</span><span class="sub">${ev.name}</span>`;
@@ -101,7 +143,8 @@ function renderBlocks(container, voices, opts) {
     if (!ev || !el) return;
     const sr = scroller.getBoundingClientRect(), er = el.getBoundingClientRect();
     const contentLeft = er.left - sr.left + scroller.scrollLeft;
-    const frac = ev.durBeats ? clamp((beat - ev.startBeat) / ev.durBeats, 0, 1) : 0;
+    const dBeat = melDb(beat);   // 真实拍 -> 展示拍(时间轴)
+    const frac = ev.durBeats ? clamp((dBeat - ev.startBeat) / ev.durBeats, 0, 1) : 0;
     const x = contentLeft + frac * er.width;            // 播放头在内容坐标中的位置
     const max = scroller.scrollWidth - scroller.clientWidth;
     scroller.scrollLeft = clamp(x - scroller.clientWidth * 0.4, 0, Math.max(0, max));
@@ -134,7 +177,7 @@ function renderPianoRoll(container, voices, opts) {
   const s = svg('svg', { width: W, height: H }, scroller);
   for (let m = lo; m <= hi; m++) svg('rect', { x: 0, y: yOf(m), width: W, height: ROWH, fill: isBlack(m) ? 'rgba(0,0,0,.22)' : 'transparent' }, s);
   svg('text', { x: 2, y: 10, fill: '#8a90a3', 'font-size': 9, 'font-family': 'sans-serif' }, s).textContent = '1';
-  barPositions(opts, voices, totalBeats).forEach((b, idx) => {
+  (opts._bars || []).forEach((b, idx) => {
     svg('line', { x1: b * BW, y1: 0, x2: b * BW, y2: H, stroke: '#5a6076', 'stroke-width': 1 }, s);
     svg('text', { x: b * BW + 2, y: 10, fill: '#8a90a3', 'font-size': 9, 'font-family': 'sans-serif' }, s).textContent = '' + (idx + 2);
   });
@@ -149,11 +192,12 @@ function renderPianoRoll(container, voices, opts) {
   const playhead = svg('line', { x1: 0, y1: 0, x2: 0, y2: H, stroke: '#ffffff', 'stroke-width': 1.5, opacity: 0.5 }, s);
 
   const hl = makeHighlight(container);
+  const melDb = opts._melDb || ((b) => b);
   return function (active, beat) {
     hl(active);
     if (beat == null) { playhead.setAttribute('opacity', 0); return; }
     playhead.setAttribute('opacity', 0.5);
-    const x = beat * BW;
+    const x = melDb(beat) * BW;   // 真实拍 -> 展示拍(时间轴)
     playhead.setAttribute('x1', x); playhead.setAttribute('x2', x);
     const max = scroller.scrollWidth - scroller.clientWidth;
     scroller.scrollLeft = clamp(x - scroller.clientWidth * 0.4, 0, Math.max(0, max));
@@ -179,7 +223,7 @@ function renderStaff(container, voices, opts) {
   // 小节线: 按固定拍数, 实线贯穿所有谱表; 先画好垫在底层, 避免挡住之后的音符点击
   const barTop = TOP, barBot = TOP + (voices.length - 1) * BAND + 4 * LINEGAP;
   svg('text', { x: LEFT + 2, y: barTop - 4, fill: '#8a90a3', 'font-size': 10, 'font-family': 'sans-serif', 'pointer-events': 'none' }, s).textContent = '1';
-  barPositions(opts, voices, totalBeats).forEach((b, idx) => {
+  (opts._bars || []).forEach((b, idx) => {
     const x = LEFT + b * BW;
     svg('line', { x1: x, y1: barTop, x2: x, y2: barBot, stroke: '#aab0c4', 'stroke-width': 1.6, 'pointer-events': 'none' }, s);
     svg('text', { x: x + 2, y: barTop - 4, fill: '#8a90a3', 'font-size': 10, 'font-family': 'sans-serif', 'pointer-events': 'none' }, s).textContent = '' + (idx + 2);
@@ -219,9 +263,9 @@ function renderStaff(container, voices, opts) {
       if (d < botDia) for (let dd = botDia - 2; dd >= d; dd -= 2) svg('line', { x1: x - 7, y1: yDia(dd), x2: x + 7, y2: yDia(dd), stroke: '#454b5c' }, g);
       const sp = spell(ev.name);
       if (sp && sp.acc === '#') svg('text', { x: x - 13, y: y + 4, fill: vc.color, 'font-size': 14 }, g).textContent = '♯';
-      const open = ev.durBeats >= 2;
+      const open = ev.durRaw >= 2;   // 音符头样式按"真实时值", 不受变速影响
       svg('ellipse', { cx: x, cy: y, rx: 5.4, ry: 4, fill: open ? 'none' : vc.color, stroke: vc.color, 'stroke-width': open ? 1.6 : 1, transform: `rotate(-18 ${x} ${y})` }, g);
-      if (ev.durBeats < 4) {
+      if (ev.durRaw < 4) {
         const up = d < refDia + 4;
         svg('line', { x1: up ? x + 5 : x - 5, y1: y, x2: up ? x + 5 : x - 5, y2: y + (up ? -1 : 1) * 3 * LINEGAP, stroke: vc.color, 'stroke-width': 1.4 }, g);
       }
@@ -229,20 +273,26 @@ function renderStaff(container, voices, opts) {
   });
 
   const hl = makeHighlight(container);
+  const melDb = opts._melDb || ((b) => b);
   let lastPage = -1;
   return function (active, beat) {
     hl(active);
     if (beat == null) return;
-    const p = clamp(Math.floor(beat / beatsPerPage), 0, pages - 1);
+    const p = clamp(Math.floor(melDb(beat) / beatsPerPage), 0, pages - 1);   // 真实拍 -> 展示拍(时间轴)
     if (p !== lastPage) { lastPage = p; scroller.scrollTo({ left: p * stride, behavior: 'smooth' }); }
   };
 }
 
 function renderView(container, voices, mode, opts) {
   container.innerHTML = '';
-  if (mode === 'piano') return renderPianoRoll(container, voices, opts);
-  if (mode === 'staff') return renderStaff(container, voices, opts);
-  return renderBlocks(container, voices, opts);
+  // 小节线在"真实拍"里算好, 再用旋律的展示映射转到时间轴; 各视图内部改用 opts._bars。
+  const realTotal = Math.max(0, ...voices.map((v) => v.model.totalBeats));
+  const barsReal = barPositions(opts, voices, realTotal);
+  const { voices: dv, melDb } = displayTransform(voices);
+  const dOpts = Object.assign({}, opts, { _bars: barsReal.map(melDb), _melDb: melDb });
+  if (mode === 'piano') return renderPianoRoll(container, dv, dOpts);
+  if (mode === 'staff') return renderStaff(container, dv, dOpts);
+  return renderBlocks(container, dv, dOpts);
 }
 
 if (typeof window !== 'undefined') window.renderView = renderView;
