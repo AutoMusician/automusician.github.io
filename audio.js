@@ -365,8 +365,11 @@ class AudioEngine {
   // voices: [{ events, gain?, wave?, tempos? }]  多声部同时播放
   //   每个声部有自己的分段恒速表(tempos), 允许不同速度/中途变速; 缺省用全局 bpm。
   // onTick(activeIdxPerVoice, beat) 高亮回调 (beat 取旋律声部拍位, 供视图滚动); onEnd 结束回调
-  // fromBeat: 从第几拍开始播放 (默认 0 = 开头), 各声部都从各自的该拍位起
-  async play(voices, bpm, onTick, onEnd, fromBeat) {
+  // fromBeat: 从第几拍开始播放 (默认 0 = 开头); fromVoice: fromBeat 所属声部(默认旋律 0)。
+  //   起播点是一个"共享时间戳"—— 把 fromBeat 用其所属声部的速度换算成从第 0 拍(全曲共同
+  //   起点)起的秒数 fromT, 各声部都从这个同一时刻切入。这样即便各声部速度不同(复合速度),
+  //   从中间起播也整齐对齐(而不是各自跑到同一个"拍号"上、时间戳却错开)。
+  async play(voices, bpm, onTick, onEnd, fromBeat, fromVoice) {
     this.stop();
     const ctx = this.unlock();               // 同步解锁 (在播放手势内)
     if (ctx.state !== 'running') { try { await ctx.resume(); } catch (e) {} }
@@ -377,39 +380,41 @@ class AudioEngine {
     let lastEnd = t0;
     const tmap = (v) => (v && v.tempos && v.tempos.length) ? v.tempos : [{ beat: 0, bpm: bpm || 72 }];
 
+    // 起播的共享时间戳(从第 0 拍起的秒数)
+    const fromT = beatToTime(tmap(voices[fromVoice || 0]), fromBeat);
+
     voices.forEach((voice) => {
       const vg = voice.gain == null ? 1 : voice.gain;
       const vw = voice.wave;
       const tempos = tmap(voice);
-      const fromT = beatToTime(tempos, fromBeat);
       for (const ev of voice.events) {
         if (ev.type !== 'note') continue;
-        const evEnd = ev.startBeat + ev.durBeats;
-        if (evEnd <= fromBeat) continue;
-        const noteStart = Math.max(ev.startBeat, fromBeat);
-        const start = t0 + (beatToTime(tempos, noteStart) - fromT);
-        const dur = beatToTime(tempos, evEnd) - beatToTime(tempos, noteStart);
+        const evEndT = beatToTime(tempos, ev.startBeat + ev.durBeats);
+        if (evEndT <= fromT) continue;                          // 起播时刻之前已结束, 跳过
+        const startT = Math.max(beatToTime(tempos, ev.startBeat), fromT); // 跨起播点的音裁到起播时刻
+        const start = t0 + (startT - fromT);
+        const dur = evEndT - startT;
         this.scheduleNote(ev.midi, start, dur, vg, vw);
         lastEnd = Math.max(lastEnd, start + dur);
       }
     });
 
-    // 每个声部按各自速度把 wall-clock 时间换算成拍位, 独立高亮
+    // 每个声部按各自速度把 wall-clock 时间换算成拍位, 独立高亮; 全部以同一 fromT 为起点
     const melTempos = tmap(voices[0]);
-    const melFromT = beatToTime(melTempos, fromBeat);
     const tick = () => {
       if (!this.playing) return;
       const now = ctx.currentTime;
+      const elapsed = fromT + (now - t0);
       const active = voices.map((voice) => {
         const tempos = tmap(voice);
-        const b = timeToBeat(tempos, beatToTime(tempos, fromBeat) + (now - t0));
+        const b = timeToBeat(tempos, elapsed);
         for (let k = 0; k < voice.events.length; k++) {
           const e = voice.events[k];
           if (e.type === 'note' && b >= e.startBeat && b < e.startBeat + e.durBeats) return k;
         }
         return -1;
       });
-      const melBeat = timeToBeat(melTempos, melFromT + (now - t0));
+      const melBeat = timeToBeat(melTempos, elapsed);
       if (onTick) onTick(active, Math.max(0, melBeat));
       if (now >= lastEnd + 0.05) {
         this.playing = false;
