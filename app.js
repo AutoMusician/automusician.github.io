@@ -24,8 +24,7 @@ const clearSampleBtn = $('clearSample');
 let rows = [];        // 声部编辑行: [{ wrap, textarea }]
 let setActive = null; // 当前视图的高亮函数
 let parsed = [];      // 最近一次解析的声部 [{ label, color, model }]
-let playFromBeat = 0; // 从第几拍开始播放 (点击可视化音符设置)
-let playFromVoice = 0; // playFromBeat 所属声部 (各声部速度可能不同, 需用其速度换算起播时间戳)
+let playFromBeat = 0; // 从第几拍开始播放, 以旋律(声部0)拍位为准 (点击任意声部的音都换算到旋律时间轴)
 
 function updatePlayBtn() {
   playBtn.textContent = playFromBeat > 0 ? `▶ 从第${Math.round(playFromBeat * 10) / 10}拍` : '▶ 播放';
@@ -201,11 +200,11 @@ function onPlay() {
   const bpm = parsed[0].model.bpm;
   const voiceEvents = parsed.map((v, i) => ({ events: v.model.events, tempos: v.model.tempos, gain: (rows[i] ? +rows[i].volEl.value : 100) / 100, wave: rows[i] ? rows[i].waveEl.value : waveSel.value }));
   playBtn.disabled = true; stopBtn.disabled = false;
-  const from = playFromBeat, fromV = playFromVoice;
+  const from = playFromBeat;
   engine.play(voiceEvents, bpm,
     (active, beat) => { if (setActive) setActive(active, beat); },
-    () => { playFromBeat = 0; playFromVoice = 0; updatePlayBtn(); playBtn.disabled = false; stopBtn.disabled = true; if (setActive) setActive(parsed.map(() => -1)); },
-    from, fromV);
+    () => { playFromBeat = 0; updatePlayBtn(); playBtn.disabled = false; stopBtn.disabled = true; if (setActive) setActive(parsed.map(() => -1)); },
+    from);
 }
 
 function onStop() {
@@ -261,7 +260,7 @@ function applyBarlines() {
 // 点击视图中的音符 -> 选中源文字 + 设置播放起始位置
 viz.addEventListener('click', (e) => {
   const el = e.target.closest && e.target.closest('[data-v][data-s]');
-  if (!el) { playFromBeat = 0; playFromVoice = 0; updatePlayBtn(); return; }
+  if (!el) { playFromBeat = 0; updatePlayBtn(); return; }
   const v = +el.getAttribute('data-v');
   const i = el.getAttribute('data-i');
   const s = +el.getAttribute('data-s'), en = +el.getAttribute('data-e');
@@ -270,8 +269,11 @@ viz.addEventListener('click', (e) => {
   row.textarea.focus();
   row.textarea.setSelectionRange(s, en);
   if (i != null && parsed[v] && parsed[v].model.events[+i]) {
-    playFromBeat = parsed[v].model.events[+i].startBeat;
-    playFromVoice = v;
+    // 点击的是某声部某拍 -> 先换成共享时间戳, 再换回旋律拍位, 使起播点统一到旋律时间轴。
+    // 这样各声部速度不同时, 点任意声部的音, 全部声部都从同一时刻切入(数字也以旋律为准)。
+    const rawBeat = parsed[v].model.events[+i].startBeat;
+    const t = window.beatToTime(parsed[v].model.tempos, rawBeat);
+    playFromBeat = window.timeToBeat(parsed[0].model.tempos, t);
     updatePlayBtn();
   }
 });

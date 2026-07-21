@@ -436,4 +436,9 @@ class AudioEngine {
   }
 }
 
-if (typeof window !== 'undefined') window.AudioEngine = AudioEngine;
+if (typeof window !== 'undefined') {
+  window.AudioEngine = AudioEngine;
+  // 供 app.js 把"某声部某拍"换算成共享时间戳 / 旋律拍位(起播点统一到旋律时间轴)
+  window.beatToTime = beatToTime;
+  window.timeToBeat = timeToBeat;
+}
