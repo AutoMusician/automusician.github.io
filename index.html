@@ -52,7 +52,9 @@
   .voicerow-edit.melody textarea { min-height: 62px; border-color: #39518a; }
   .voicerow-edit textarea::placeholder { color: #5b6072; }
 
-  .rowbtns { display: flex; gap: 8px; margin: 10px 0 4px; }
+  /* 按钮多了一行放不下: 允许换行, 并禁止按钮内部把字挤成竖排 */
+  .rowbtns { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 10px 0 4px; }
+  .rowbtns button, .rowbtns label.field { white-space: nowrap; }
   button, select, input[type=number] {
     background: var(--panel); color: var(--fg); border: 1px solid var(--line);
     border-radius: 8px; padding: 8px 14px; font-size: 14px; cursor: pointer;
@@ -165,6 +167,13 @@
         <option value="bass">低音线</option>
       </select>
     </label>
+    <button id="fugueBtn" class="ghost" title="以旋律开头为主题写一首赋格(呈示部+插部+终止) · 会改写旋律行">🎼 写赋格</button>
+    <label class="field">
+      <select id="fugueVoices">
+        <option value="3">3 声部</option>
+        <option value="4">4 声部</option>
+      </select>
+    </label>
     <span class="sep"></span>
     <label class="field">每小节 <input type="number" id="barBeats" value="4" min="0" max="16" /> 拍</label>
     <label class="field">挂拍 <input type="number" id="pickup" value="0" min="0" max="15" /> 拍</label>
@@ -201,6 +210,7 @@
         <option value="flute">长笛 (合成)</option>
         <option value="chime">编钟 (合成)</option>
         <option value="glock">钟琴 (合成)</option>
+        <option value="organ">管风琴 (教堂)</option>
         <option value="ethereal">空灵 (合成)</option>
       </select>
     </label>
@@ -240,6 +250,7 @@
 
   <script src="parser.js"></script>
   <script src="harmony.js"></script>
+  <script src="fugue.js"></script>
   <script src="render.js"></script>
   <script src="audio.js"></script>
   <script src="musicxml.js"></script>

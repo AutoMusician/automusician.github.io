@@ -1,5 +1,5 @@
 // app.js —— 装配: 多声部输入 -> 解析 -> 视图渲染 -> 多声部播放
-/* global parseMelody, autoHarmonize, renderView, AudioEngine */
+/* global parseMelody, autoHarmonize, makeFugue, renderView, AudioEngine */
 
 const engine = new AudioEngine();
 window.engine = engine; // 便于调试
@@ -16,6 +16,7 @@ const stopBtn = $('stop');
 const testToneBtn = $('testTone');
 const viewSel = $('view');
 const harmTexSel = $('harmTex');
+const fugueVoicesSel = $('fugueVoices');
 const waveSel = $('wave');
 const sampleInput = $('sample');
 const sampleBase = $('sampleBase');
@@ -35,7 +36,7 @@ const STORE_KEY = 'automusician.v1';
 function snapshot() {
   return {
     rows: rows.map((r) => ({ text: r.textarea.value, label: r.label || null, auto: !!r.auto, vol: +r.volEl.value, wave: r.waveEl.value })),
-    view: viewSel.value, wave: waveSel.value, harmTex: harmTexSel.value, barBeats: $('barBeats').value, pickup: $('pickup').value,
+    view: viewSel.value, wave: waveSel.value, harmTex: harmTexSel.value, fugueVoices: fugueVoicesSel.value, barBeats: $('barBeats').value, pickup: $('pickup').value,
   };
 }
 // 把一份状态对象套用到界面上 (不触发渲染; 调用方随后自行 renderAll)
@@ -46,6 +47,7 @@ function applyState(saved) {
   if (saved.view) viewSel.value = saved.view;
   if (saved.wave) { waveSel.value = saved.wave; engine.wave = saved.wave; }
   if (saved.harmTex) harmTexSel.value = saved.harmTex;
+  if (saved.fugueVoices) fugueVoicesSel.value = saved.fugueVoices;
   if (saved.barBeats) $('barBeats').value = saved.barBeats;
   if (saved.pickup != null) $('pickup').value = saved.pickup;
   relabel();
@@ -128,7 +130,7 @@ function addRow(text, opts) {
   const tag = document.createElement('div'); tag.className = 'vtag';
   const nameEl = document.createElement('span'); nameEl.className = 'vname';
   const waveEl = document.createElement('select'); waveEl.className = 'vwave'; waveEl.title = '音色';
-  waveEl.innerHTML = '<option value="piano">钢琴</option><option value="violin">提琴</option><option value="horn">圆号</option><option value="guitar">吉他</option><option value="flute">长笛</option><option value="chime">编钟</option><option value="glock">钟琴</option><option value="ethereal">空灵</option><option value="square">方波</option><option value="triangle">三角波</option><option value="sawtooth">锯齿</option><option value="sine">正弦</option>';
+  waveEl.innerHTML = '<option value="piano">钢琴</option><option value="violin">提琴</option><option value="horn">圆号</option><option value="guitar">吉他</option><option value="flute">长笛</option><option value="chime">编钟</option><option value="glock">钟琴</option><option value="organ">管风琴</option><option value="ethereal">空灵</option><option value="square">方波</option><option value="triangle">三角波</option><option value="sawtooth">锯齿</option><option value="sine">正弦</option>';
   waveEl.value = (opts && opts.wave) || waveSel.value;
   const volEl = document.createElement('input');
   volEl.type = 'range'; volEl.className = 'vvol'; volEl.min = 0; volEl.max = 100; volEl.title = '音量';
@@ -229,6 +231,32 @@ function runAutoHarmonize() {
   status.textContent = `✨ 已追加和声 (${tex}) · 进行: ${chords.join(' - ')}`;
 }
 $('autoHarm').addEventListener('click', runAutoHarmonize);
+
+// 写赋格: 以旋律开头为主题生成整首赋格。与配和声不同, 赋格是一首完整的曲子 ——
+// 旋律行若原样留着会与织体打架, 所以直接改写成赋格的最高声部(主题仍在开头), 因此先确认。
+function runFugue() {
+  const m0 = parseMelody(rows[0].textarea.value);
+  if (m0.totalBeats <= 0) { status.className = 'status err'; status.textContent = '旋律为空, 无法写赋格'; return; }
+  const nv = +fugueVoicesSel.value || 3;
+  const f = makeFugue(m0, { voices: nv, barBeats: +$('barBeats').value || 0 });
+  if (!f.rows.length) { status.className = 'status err'; status.textContent = '旋律里没有音符, 无法写赋格'; return; }
+  if (!confirm(`将把旋律行改写为 ${nv} 声部赋格的最高声部 (主题 = 旋律开头 ${f.subjectBeats} 拍), 并替换掉自动生成的和声行。继续？`)) return;
+
+  // 保留旋律行的首行(调号/速度), 正文换成赋格最高声部
+  const cur = rows[0].textarea.value;
+  const nl = cur.indexOf('\n');
+  rows[0].textarea.value = (nl === -1 ? cur : cur.slice(0, nl)) + '\n' + f.rows[0].text;
+  rows[0].waveEl.value = 'organ';
+  // 清掉之前自动生成的行(手写的声部保留), 再挂上赋格其余声部
+  rows.filter((r, i) => i > 0 && r.auto).forEach((r) => r.wrap.remove());
+  rows = rows.filter((r, i) => i === 0 || !r.auto);
+  f.rows.slice(1).forEach((fr) => addRow(fr.text, { auto: true, label: fr.label, wave: 'organ' }));
+  relabel();
+  renderAll();
+  status.className = 'status';
+  status.textContent = `🎼 已写成 ${nv} 声部赋格 · 主题 ${f.subjectBeats} 拍 · 全曲 ${f.totalBeats} 拍 · 音色已设为教堂管风琴`;
+}
+$('fugueBtn').addEventListener('click', runFugue);
 
 // 调整每小节拍数/挂拍时: 删除各声部原有的 |, 再按固定拍位(含挂拍偏移)重新插入 |
 function applyBarlines() {
@@ -358,6 +386,7 @@ $('resetDemo').addEventListener('click', () => {
   viewSel.value = 'blocks';
   waveSel.value = 'square'; engine.wave = 'square';
   harmTexSel.value = 'block';
+  fugueVoicesSel.value = '3';
   $('barBeats').value = '4';
   $('pickup').value = '0';
   relabel();
@@ -369,6 +398,7 @@ stopBtn.addEventListener('click', onStop);
 viewSel.addEventListener('change', renderAll);
 waveSel.addEventListener('change', () => { engine.wave = waveSel.value; saveState(); });
 harmTexSel.addEventListener('change', saveState);
+fugueVoicesSel.addEventListener('change', saveState);
 $('barBeats').addEventListener('change', applyBarlines); // 改拍数 -> 各声部重写 |
 $('pickup').addEventListener('change', applyBarlines);   // 改挂拍 -> 同上
 window.addEventListener('beforeunload', saveState);
@@ -427,6 +457,7 @@ document.addEventListener('keydown', (e) => {
     if (saved.view) viewSel.value = saved.view;
     if (saved.wave) { waveSel.value = saved.wave; engine.wave = saved.wave; }
     if (saved.harmTex) harmTexSel.value = saved.harmTex;
+    if (saved.fugueVoices) fugueVoicesSel.value = saved.fugueVoices;
     if (saved.barBeats) $('barBeats').value = saved.barBeats;
     if (saved.pickup != null) $('pickup').value = saved.pickup;
   } else {

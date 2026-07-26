@@ -1,6 +1,8 @@
 // audio.js —— 基于 Web Audio API 的播放引擎 (零依赖)
 // 默认音色: 方波振荡器 (经典蜂鸣音); 也可换其它波形, 或加载一段采样做简易采样器
 
+const CHURCH_WET = 0.85;   // 教堂混响的湿声量(管风琴用)
+
 // 分段恒速: 把"拍位"换算成"从第 0 拍起的秒数", 支持中途变速。
 //   tempos = [{ beat, bpm }] 按 beat 升序, 第一段 beat 恒为 0。
 function beatToTime(tempos, beat) {
@@ -95,6 +97,7 @@ class AudioEngine {
     if (w === 'flute') return this.scheduleFlute(midi, start, dur, peak);
     if (w === 'chime') return this.scheduleChime(midi, start, dur, peak);
     if (w === 'glock') return this.scheduleGlock(midi, start, dur, peak);
+    if (w === 'organ') return this.scheduleOrgan(midi, start, dur, peak);
     if (w === 'ethereal') return this.scheduleEthereal(midi, start, dur, peak);
     return this.scheduleOsc(midi, start, dur, peak, w);
   }
@@ -333,6 +336,67 @@ class AudioEngine {
     this.scheduled.push(noise);
   }
 
+  // 教堂堂音: 用一段指数衰减噪声当脉冲响应做卷积混响 (懒加载, 全声部共用一个送出)
+  churchReverb() {
+    const ctx = this.ctx;
+    if (!this._reverb) {
+      const sec = 2.8, len = Math.floor(ctx.sampleRate * sec), pre = ctx.sampleRate * 0.02;
+      const buf = ctx.createBuffer(2, len, ctx.sampleRate);
+      for (let ch = 0; ch < 2; ch++) {
+        const d = buf.getChannelData(ch);
+        // 前 20ms 留空 = 预延迟(大空间里直达声与第一次反射之间的间隔); 两声道独立取噪声 -> 立体声宽度
+        for (let i = 0; i < len; i++) d[i] = i < pre ? 0 : (Math.random() * 2 - 1) * Math.pow(1 - i / len, 2.2);
+      }
+      const conv = ctx.createConvolver(); conv.buffer = buf;
+      const wet = ctx.createGain(); wet.gain.value = CHURCH_WET;
+      conv.connect(wet); wet.connect(this.master);
+      this._reverb = conv; this._reverbWet = wet;
+    }
+    const g = this._reverbWet.gain, now = ctx.currentTime;
+    g.cancelScheduledValues(now); g.setValueAtTime(CHURCH_WET, now);  // 撤销上次 stop() 的收尾
+    return this._reverb;
+  }
+
+  // 教堂管风琴: 音栓叠加(16' 8' 4' 2⅔' 2' 1⅗' 1') + 极快起收、中段绝对平直(风压恒定, 无颤音)
+  //   + 起音气声(chiff) + 教堂堂音 —— 庄严、绵长、有空间感
+  scheduleOrgan(midi, start, dur, peak) {
+    const ctx = this.ctx;
+    const f = this.midiToFreq(midi);
+    const p = peak * 0.26;
+    const a = 0.025, r = Math.min(0.09, dur * 0.3);   // 起音/收音都很快, 中间完全恒定
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0, start);
+    g.gain.linearRampToValueAtTime(p, start + a);
+    g.gain.setValueAtTime(p, start + Math.max(a, dur - r));
+    g.gain.linearRampToValueAtTime(0, start + dur);
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass'; lp.frequency.value = Math.min(7000, f * 9); lp.Q.value = 0.4;
+    lp.connect(g); g.connect(this.master);
+    const rev = this.churchReverb();
+    if (rev) g.connect(rev);
+    // 音栓 [倍频, 幅度, 失谐(音分)]: 16'低八度衬底 / 8'基音 / 4' / 2⅔'鼻音 / 2' / 1⅗' / 1'
+    // 各排管略微失谐, 叠起来就有管风琴那种缓慢拍频的厚度
+    for (const [mult, amt, det] of [[0.5, 0.3, -4], [1, 1, 0], [2, 0.55, 3], [3, 0.2, -6], [4, 0.3, 5], [5, 0.08, -8], [8, 0.14, 7]]) {
+      if (f * mult > 15000) continue;
+      const o = ctx.createOscillator(); o.type = 'sine'; o.frequency.value = f * mult; o.detune.value = det;
+      const pg = ctx.createGain(); pg.gain.value = amt;
+      o.connect(pg); pg.connect(lp);
+      o.start(start); o.stop(start + dur + 0.12);
+      this.scheduled.push(o);
+    }
+    // 起音气声: 管子起振那一下的风声, 不走包络(否则会被慢起音吃掉)
+    const noise = ctx.createBufferSource(); noise.buffer = this.getNoiseBuffer();
+    const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = Math.min(9000, f * 4); bp.Q.value = 1.2;
+    const ng = ctx.createGain();
+    ng.gain.setValueAtTime(0, start);
+    ng.gain.linearRampToValueAtTime(p * 0.45, start + 0.008);
+    ng.gain.exponentialRampToValueAtTime(0.0002, start + 0.07);
+    noise.connect(bp); bp.connect(ng); ng.connect(this.master);
+    if (rev) ng.connect(rev);
+    noise.start(start); noise.stop(start + 0.1);
+    this.scheduled.push(noise);
+  }
+
   // 空灵 pad: 慢起慢收 + 微失谐叠层(宽) + 高八度/两高八度微光 + 缓慢颤动 —— 流行/史诗那种空旷感
   scheduleEthereal(midi, start, dur, peak) {
     const ctx = this.ctx;
@@ -433,6 +497,13 @@ class AudioEngine {
     this.raf = null;
     for (const s of this.scheduled) { try { s.stop(); } catch (e) {} }
     this.scheduled = [];
+    // 收掉教堂混响的尾巴, 否则按了停止还要响两三秒; 下次发声时 churchReverb() 会恢复
+    if (this._reverbWet) {
+      const g = this._reverbWet.gain, now = this.ctx.currentTime;
+      g.cancelScheduledValues(now);
+      g.setValueAtTime(g.value, now);
+      g.linearRampToValueAtTime(0, now + 0.18);
+    }
   }
 }
 
