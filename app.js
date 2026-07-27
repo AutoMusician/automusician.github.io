@@ -5,6 +5,11 @@ const engine = new AudioEngine();
 window.engine = engine; // 便于调试
 
 const COLORS = ['#5b8cff', '#48c78e', '#e0a82e', '#c45cff', '#ff7a8a', '#3bc9db'];
+// 可用音色。方波已移除, 但旧存档/旧分享链接里可能还写着 square —— 一律回落到默认音色,
+// 否则会静默地按一个已经不存在的音色播放。
+const WAVES = ['piano', 'violin', 'horn', 'guitar', 'flute', 'chime', 'glock', 'organ', 'ethereal', 'triangle', 'sawtooth', 'sine'];
+const DEFAULT_WAVE = 'piano';
+const normWave = (w) => (WAVES.indexOf(w) >= 0 ? w : DEFAULT_WAVE);
 const MELODY_DEMO = "1=C 72\n1 1 5 5 6 6 55 +11 -1 1 [123] 11";
 
 const $ = (id) => document.getElementById(id);
@@ -45,7 +50,7 @@ function applyState(saved) {
   rows = [];
   if (saved.rows) saved.rows.forEach((r) => addRow(r.text, { auto: r.auto, label: r.label || undefined, vol: r.vol, wave: r.wave }));
   if (saved.view) viewSel.value = saved.view;
-  if (saved.wave) { waveSel.value = saved.wave; engine.wave = saved.wave; }
+  if (saved.wave) { waveSel.value = normWave(saved.wave); engine.wave = waveSel.value; }
   if (saved.harmTex) harmTexSel.value = saved.harmTex;
   if (saved.fugueVoices) fugueVoicesSel.value = saved.fugueVoices;
   if (saved.barBeats) $('barBeats').value = saved.barBeats;
@@ -130,8 +135,8 @@ function addRow(text, opts) {
   const tag = document.createElement('div'); tag.className = 'vtag';
   const nameEl = document.createElement('span'); nameEl.className = 'vname';
   const waveEl = document.createElement('select'); waveEl.className = 'vwave'; waveEl.title = '音色';
-  waveEl.innerHTML = '<option value="piano">钢琴</option><option value="violin">提琴</option><option value="horn">圆号</option><option value="guitar">吉他</option><option value="flute">长笛</option><option value="chime">编钟</option><option value="glock">钟琴</option><option value="organ">管风琴</option><option value="ethereal">空灵</option><option value="square">方波</option><option value="triangle">三角波</option><option value="sawtooth">锯齿</option><option value="sine">正弦</option>';
-  waveEl.value = (opts && opts.wave) || waveSel.value;
+  waveEl.innerHTML = '<option value="piano">钢琴</option><option value="violin">提琴</option><option value="horn">圆号</option><option value="guitar">吉他</option><option value="flute">长笛</option><option value="chime">编钟</option><option value="glock">钟琴</option><option value="organ">管风琴</option><option value="ethereal">空灵</option><option value="triangle">三角波</option><option value="sawtooth">锯齿</option><option value="sine">正弦</option>';
+  waveEl.value = normWave((opts && opts.wave) || waveSel.value);
   const volEl = document.createElement('input');
   volEl.type = 'range'; volEl.className = 'vvol'; volEl.min = 0; volEl.max = 100; volEl.title = '音量';
   volEl.value = (opts && opts.vol != null) ? opts.vol : (isMelody ? 100 : 70);
@@ -384,7 +389,7 @@ $('resetDemo').addEventListener('click', () => {
   rows = [];
   addRow(MELODY_DEMO);
   viewSel.value = 'blocks';
-  waveSel.value = 'square'; engine.wave = 'square';
+  waveSel.value = DEFAULT_WAVE; engine.wave = DEFAULT_WAVE;
   harmTexSel.value = 'block';
   fugueVoicesSel.value = '3';
   $('barBeats').value = '4';
@@ -455,7 +460,7 @@ document.addEventListener('keydown', (e) => {
   if (saved && Array.isArray(saved.rows) && saved.rows.length) {
     saved.rows.forEach((r) => addRow(r.text, { auto: r.auto, label: r.label || undefined, vol: r.vol, wave: r.wave }));
     if (saved.view) viewSel.value = saved.view;
-    if (saved.wave) { waveSel.value = saved.wave; engine.wave = saved.wave; }
+    if (saved.wave) { waveSel.value = normWave(saved.wave); engine.wave = waveSel.value; }
     if (saved.harmTex) harmTexSel.value = saved.harmTex;
     if (saved.fugueVoices) fugueVoicesSel.value = saved.fugueVoices;
     if (saved.barBeats) $('barBeats').value = saved.barBeats;

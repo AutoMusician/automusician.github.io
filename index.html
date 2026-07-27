@@ -199,10 +199,6 @@
     <span class="sep"></span>
     <label class="field">音色
       <select id="wave">
-        <option value="square">蜂鸣音 (方波)</option>
-        <option value="triangle">三角波</option>
-        <option value="sawtooth">锯齿波</option>
-        <option value="sine">正弦波</option>
         <option value="piano">钢琴 (合成)</option>
         <option value="violin">提琴 (合成)</option>
         <option value="horn">圆号 (合成)</option>
@@ -212,6 +208,9 @@
         <option value="glock">钟琴 (合成)</option>
         <option value="organ">管风琴 (教堂)</option>
         <option value="ethereal">空灵 (合成)</option>
+        <option value="triangle">三角波</option>
+        <option value="sawtooth">锯齿波</option>
+        <option value="sine">正弦波</option>
       </select>
     </label>
     <label class="field">采样 <input type="file" id="sample" accept="audio/*" style="max-width:140px" /></label>
@@ -248,12 +247,14 @@
     <p>快捷键：焦点在输入框外时按 <code>空格</code> 播放 / 停止。</p>
   </details>
 
-  <script src="parser.js"></script>
-  <script src="harmony.js"></script>
-  <script src="fugue.js"></script>
-  <script src="render.js"></script>
-  <script src="audio.js"></script>
-  <script src="musicxml.js"></script>
-  <script src="app.js"></script>
+  <!-- ?v= 是缓存戳: GitHub Pages 会让浏览器缓存 js 十分钟以上, 发版后 index.html 更新了而
+       js 仍取自缓存, 就会出现"按钮在、点了没反应"这种新旧混用。改动 js 后把 v 一起改掉。 -->
+  <script src="parser.js?v=3"></script>
+  <script src="harmony.js?v=3"></script>
+  <script src="fugue.js?v=3"></script>
+  <script src="render.js?v=3"></script>
+  <script src="audio.js?v=3"></script>
+  <script src="musicxml.js?v=3"></script>
+  <script src="app.js?v=3"></script>
 </body>
 </html>

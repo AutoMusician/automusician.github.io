@@ -34,7 +34,7 @@ class AudioEngine {
   constructor() {
     this.ctx = null;
     this.master = null;
-    this.wave = 'square';      // 默认蜂鸣音
+    this.wave = 'piano';       // 默认合成钢琴
     this.sample = null;        // { buffer, baseMidi }  加载的音色采样
     this.scheduled = [];       // 已排程的发声节点, 用于 stop()
     this.playing = false;
