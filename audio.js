@@ -1,7 +1,11 @@
 // audio.js —— 基于 Web Audio API 的播放引擎 (零依赖)
 // 默认音色: 方波振荡器 (经典蜂鸣音); 也可换其它波形, 或加载一段采样做简易采样器
 
-const CHURCH_WET = 0.85;   // 教堂混响的湿声量(管风琴用)
+// 教堂混响(管风琴用)。湿声不能太大: 管风琴是平直持续音, 几个声部一叠, 混响会不断累积,
+// 盖过每个音的起音 —— 听感上拍点就糊掉了, 像是声音比画面慢了一两拍。
+const CHURCH_WET = 0.30;   // 湿声量
+const CHURCH_SEC = 2.0;    // 余韵长度(秒)
+const CHURCH_DECAY = 2.8;  // 衰减指数, 越大收得越快
 
 // 分段恒速: 把"拍位"换算成"从第 0 拍起的秒数", 支持中途变速。
 //   tempos = [{ beat, bpm }] 按 beat 升序, 第一段 beat 恒为 0。
@@ -340,12 +344,12 @@ class AudioEngine {
   churchReverb() {
     const ctx = this.ctx;
     if (!this._reverb) {
-      const sec = 2.8, len = Math.floor(ctx.sampleRate * sec), pre = ctx.sampleRate * 0.02;
+      const len = Math.floor(ctx.sampleRate * CHURCH_SEC), pre = ctx.sampleRate * 0.02;
       const buf = ctx.createBuffer(2, len, ctx.sampleRate);
       for (let ch = 0; ch < 2; ch++) {
         const d = buf.getChannelData(ch);
         // 前 20ms 留空 = 预延迟(大空间里直达声与第一次反射之间的间隔); 两声道独立取噪声 -> 立体声宽度
-        for (let i = 0; i < len; i++) d[i] = i < pre ? 0 : (Math.random() * 2 - 1) * Math.pow(1 - i / len, 2.2);
+        for (let i = 0; i < len; i++) d[i] = i < pre ? 0 : (Math.random() * 2 - 1) * Math.pow(1 - i / len, CHURCH_DECAY);
       }
       const conv = ctx.createConvolver(); conv.buffer = buf;
       const wet = ctx.createGain(); wet.gain.value = CHURCH_WET;
